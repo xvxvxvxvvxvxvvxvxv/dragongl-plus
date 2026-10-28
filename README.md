@@ -74,7 +74,11 @@ improvements. **Download, unzip, double-click: nothing to install.**
 
 Older versions and checksums are on the [Releases page](https://github.com/xvxvxvxvvxvxvvxvxv/dragongl-plus/releases).
 The packages are built by `tools/build_release.sh` (and by the GitHub Actions
-workflow `.github/workflows/ci.yml`, which publishes a Release for every `v*` tag). They are **self-contained**: fonts, shaders, icon and the
+workflow `.github/workflows/ci.yml`, which publishes a Release for every `v*` tag).
+
+**Publishing a new version:** push a tag, e.g.
+`git tag v2026.11 && git push origin v2026.11` — GitHub Actions builds the Windows and
+Linux packages and attaches them (with `SHA256SUMS.txt`) to the release of that tag. They are **self-contained**: fonts, shaders, icon and the
 whole soundtrack live inside the executable; on Windows the C runtime is static
 (only system DLLs are used), on Linux only glibc and the graphics driver are needed.
 A graphics driver with **OpenGL 3.3** or **Vulkan 1.3** is enough.
