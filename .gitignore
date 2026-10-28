@@ -38,3 +38,7 @@ local_check.sh
 # dev artifacts produced by the DM commands (dm_pdf / dm_mapfloor)
 map_dump*.txt
 map_floor*.pdf
+build-linux/
+build-windows/
+dist/
+!shaders/spv/*.spv

@@ -21,6 +21,7 @@
 #include "protocol.h"
 #include "map.h"
 #include "game.h"
+#include "server_ui_sync.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -194,6 +195,14 @@ void send_detailed_state(Client *c) {
     s.status_icons |= (1 << 11);
   
   s.bosses_defeated = c->bosses_defeated;
+  /*v4*/
+  s.kind = KIND_PLAYER;
+  s.is_player = 1;
+  s.xp_next = get_xp_threshold(c->level + 1);
+  s.stat_points = c->unspent_stat_points;
+  s.race_id = (int)c->race_id;
+  s.class_id = (int)c->class_id;
+  s.max_floor = c->max_floor_explored;
   s.hunger_level = c->hunger_level;
   for (int i = 0; i < 10; i++) {
       s.spell_slots[i] = c->spell_slots[i];
@@ -233,7 +242,8 @@ void send_detailed_state(Client *c) {
   #undef SLOT_NAME
 
   net_send_client(c->sock, &h, sizeof(h));
-  net_send_client(c->sock, &s, sizeof(s));
+  if (net_send_client(c->sock, &s, sizeof(s)))
+    ui_sync_client(c); /*inventory/spellbook/shop, only if changed*/
 }
 
 void broadcast_spell_vfx(int sx, int sy, int tx, int ty, int vfx_type, float r, float g, float b, int floor_id) {
@@ -295,6 +305,15 @@ void client_seen_reset(int ci, int floor) {
   memset(g_client_seen_players[ci], 0, sizeof(g_client_seen_players[ci]));
   g_client_seen_floor[ci] = floor + 1;
 }
+/*An NPC died (or vanished): every client drops it from its cache (the
+ * kill event / hp<=0), so it must get a full MsgState again when it
+ * respawns - compact updates for unknown ids are ignored client-side.*/
+void client_seen_forget_npc(int npc_i) {
+  if (npc_i < 0 || npc_i >= MAX_NPCS) return;
+  for (int ci = 0; ci < MAX_CLIENTS; ci++)
+    g_client_seen_entities[ci][npc_i >> 3] &= (uint8_t)~(1u << (npc_i & 7));
+}
+
 static inline void player_seen_set(int ci, int pi) {
   g_client_seen_players[ci][pi >> 3] |= (uint8_t)(1u << (pi & 7));
 }
@@ -333,6 +352,15 @@ static void send_full_npc_state(int sock, const NPC *n) {
                     : SHOP_SPEC_NONE;
   s.is_tombstone = 0;
   s.is_player = 0;
+  /*v4: visual identity for the graphical client*/
+  if (n->archetype == ARCH_MERCHANT && n->merchant.shop_name[0])
+    copy_str(s.username, n->merchant.shop_name, sizeof(s.username));
+  else
+    copy_str(s.username, npc_name(n), sizeof(s.username));
+  s.kind = ui_creature_kind(n);
+  s.archetype = (int)n->archetype;
+  s.npc_level = ui_npc_level(n);
+  s.look_seed = ui_look_seed(n);
   net_send_client(sock, &h, sizeof(h));
   net_send_client(sock, &s, sizeof(s));
 }
@@ -356,6 +384,10 @@ static void send_full_player_state(int sock, const Client *p) {
   s.is_tombstone= 0;
   s.is_player   = 1;
   copy_str(s.username, p->username, sizeof(s.username));
+  s.kind        = KIND_PLAYER;
+  s.npc_level   = p->level;
+  s.race_id     = (int)p->race_id;
+  s.class_id    = (int)p->class_id;
   net_send_client(sock, &h, sizeof(h));
   net_send_client(sock, &s, sizeof(s));
 }
@@ -450,6 +482,7 @@ void broadcast_nearby_entities(Client *c, NPC *npcs) {
     s.shop_spec    = SHOP_SPEC_NONE;
     s.is_tombstone = 1;
     s.is_player    = 0;
+    s.kind         = KIND_TOMBSTONE;
     net_send_client(c->sock, &h, sizeof(h));
     net_send_client(c->sock, &s, sizeof(s));
   }

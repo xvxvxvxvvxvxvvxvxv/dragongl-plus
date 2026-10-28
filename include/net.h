@@ -24,6 +24,8 @@
 #include <stddef.h>
 
 int net_create_server(int port);
+/*loopback_only: bind 127.0.0.1 (solo games), else every interface.*/
+int net_create_server_ex(int port, bool loopback_only);
 int net_connect_to_server(const char *ip, int port);
 void net_set_nonblocking(int sock);
 bool net_send(int sock, const void *data, int len);
@@ -35,6 +37,13 @@ int net_receive_all(int sock, void *buffer, int len);
  * short recv() can never be mistaken for a complete header.*/
 int net_receive_exact(int sock, void *buffer, int len);
 void net_close(int sock);
+/*1 = readable, 0 = timeout, -1 = error.*/
+int net_wait_readable(int sock, int timeout_ms);
+/*true if the peer closed the connection (no data consumed).*/
+bool net_peek_closed(int sock);
+/*Connect with a timeout (host name or IPv4); returns a NON-BLOCKING
+ * socket or -1 with a human-readable reason in err.*/
+int net_connect_timeout(const char *host, int port, int timeout_ms, char *err, size_t err_len);
 
 /*Safe string copy that ALWAYS NUL-terminates: copies at most cap-1 chars
  * from src (empty string if cap < 1) and sets dst[cap-1] = 0.

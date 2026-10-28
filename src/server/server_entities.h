@@ -193,6 +193,12 @@ typedef struct {
     int max_floor_explored;
     /* --- Phase 4: Advanced Speed/Tick System --- */
     long long last_action_ms;        //Timestamp (ms) for throttling (anti-spam)
+    /*Text-command rate limit (GCRA token bucket, DragonGL+): the
+     * graphical client issues commands from buttons (equip, buy, cast...)
+     * often right after a step; sharing last_action_ms with MSG_MOVE
+     * silently DROPPED those clicks. Commands now have their own bucket:
+     * bursts of up to CMD_BURST, then one every CMD_INTERVAL_MS.*/
+    long long cmd_tat_ms;
     /*--- Phase 5: Grimoire - spells learned ---
 * Compact bitfield: bit N = 1 → magic index N in spell_database known.
      * Test: (known_spells[N/64] >> (N%64)) & 1

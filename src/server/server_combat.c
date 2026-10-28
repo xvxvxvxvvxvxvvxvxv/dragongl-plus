@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include "server_ui_sync.h"
 #include "server_combat.h"
 #include "server_internal.h"
 #include "server_world.h"
@@ -134,6 +135,10 @@ void perform_attack(Client *c, NPC *t, NPC *npcs) {
     }
   }
 
+  if (!hit) {
+    ui_broadcast_event(c->floor_id, GEV_ATTACK_MISS, c->entity_id, t->entity_id,
+                       0, t->x, t->y);
+  }
   if (hit) {
     int dc = w ? w->damage_dice_count : 1, ds = w ? w->damage_dice_sides : 4;
     if (is_crit)
@@ -162,14 +167,16 @@ void perform_attack(Client *c, NPC *t, NPC *npcs) {
 
     d = rules_calculate_damage(d, mod);
     t->hp -= d;
+    ui_broadcast_event(c->floor_id, is_crit ? GEV_ATTACK_CRIT : GEV_ATTACK_HIT,
+                       c->entity_id, t->entity_id, d, t->x, t->y);
     if (is_crit) {
       send_text_to_client(c->sock,
                           "> BLOOD! A devastating blow [%dd%d: %d %+d (+%d elem) = %d"
-                          "danni]! (HP: %d/%d)",
+                          " damage]! (HP: %d/%d)",
                           dc, ds, roll_d, mod_d, element_d, d, t->hp, t->max_hp);
     } else {
       send_text_to_client(c->sock,
-                          "  > Colpito! [%dd%d: %d %+d (+%d elem) = %d danni] (HP: %d/%d)",
+                          "  > Hit! [%dd%d: %d %+d (+%d elem) = %d damage] (HP: %d/%d)",
                           dc, ds, roll_d, mod_d, element_d, d, t->hp, t->max_hp);
     }
     clog_attack(c->username, npc_name(t), roll_v, ctx.final_value, t->ac,
@@ -199,6 +206,8 @@ void perform_attack(Client *c, NPC *t, NPC *npcs) {
       }
     }
     if (t->hp <= 0) {
+      ui_broadcast_event(t->floor_id, GEV_KILL, c->entity_id, t->entity_id,
+                         t->xp_reward, t->x, t->y);
       npc_set_active(t, false); /*also updates the O(1) floor cache (A2)*/
       t->respawn_timer = RESPAWN_TICKS;
       extern World *master_world;
@@ -340,6 +349,8 @@ void perform_attack_npc(NPC *n, Client *c, NPC *npcs) {
 
     d = rules_calculate_damage(d, d_mod);
     c->hp -= d;
+    ui_broadcast_event(c->floor_id, is_crit ? GEV_ATTACK_CRIT : GEV_ATTACK_HIT,
+                       n->entity_id, c->entity_id, d, c->x, c->y);
     send_text_to_client(c->sock, "[COMBAT] You take %d damage!", d);
     clog_attack(npc_name(n), c->username, roll_v, n_bonus, p_ac, true,
                 is_crit, d);
@@ -356,6 +367,8 @@ void perform_attack_npc(NPC *n, Client *c, NPC *npcs) {
   } else {
     clog_attack(npc_name(n), c->username, roll_v, n_bonus, p_ac, false,
                 false, 0);
+    ui_broadcast_event(c->floor_id, GEV_ATTACK_MISS, n->entity_id, c->entity_id,
+                       0, c->x, c->y);
     send_text_to_client(c->sock, "[COMBAT] %s missed you!",
                         npc_name(n));
   }
@@ -390,6 +403,8 @@ void handle_boss_death(Client *c, NPC *boss) {
         if (g_clients[i].active && g_clients[i].floor_id == boss->floor_id) {
           g_clients[i].gold += gold_reward;
           g_clients[i].bosses_defeated |= (1u << boss_index);
+          ui_send_event(&g_clients[i], GEV_BOSS_DEFEATED, boss->entity_id, 0,
+                        boss->floor_id, boss->x, boss->y);
           send_text_to_client(g_clients[i].sock,
               "[HEROIC QUEST] Boss %s has been defeated!"
               "You have obtained %lu gold and the stairs have unlocked!",

@@ -1,0 +1,24 @@
+// Windows resources: application icon and version information.
+1 ICON "dragongl.ico"
+
+1 VERSIONINFO
+FILEVERSION 2026,10,0,0
+PRODUCTVERSION 2026,10,0,0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Nicola Taibi"
+      VALUE "FileDescription", "DragonGL+ - The Long Descent"
+      VALUE "FileVersion", "2026.10"
+      VALUE "LegalCopyright", "(C) 2026 Nicola Taibi - GPL-3.0-or-later"
+      VALUE "ProductName", "DragonGL+"
+      VALUE "ProductVersion", "2026.10"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

@@ -30,14 +30,11 @@
 #include "rules.h"
 #include "species.h"
 #include "spells.h"
-#include <arpa/inet.h>
+#include "platform.h"
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
-#include <ifaddrs.h>
 #include <math.h>
-#include <netinet/in.h>
-#include <sys/epoll.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -45,11 +42,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <sys/random.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
 #include <time.h>
+#ifdef _WIN32
+#include "wepoll.h"
+typedef HANDLE epoll_handle_t;
+#define EPOLL_INVALID(h) ((h) == NULL)
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/epoll.h>
+#include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
+typedef int epoll_handle_t;
+#define EPOLL_INVALID(h) ((h) == -1)
+#endif
 
 #include "ai.h"
 #include "aoe.h"
@@ -65,6 +73,7 @@ _Static_assert((int)BOOKS_MARTIAL == SHOP_SPEC_BOOKS_MARTIAL,
 #include "server_world.h"
 #include "server_commands.h"
 #include "spell_router.h"
+#include "server_ui_sync.h"
 
 /*Population/respawn constants (RESPAWN_TICKS, DENSITY_CHECK, DENSITY_MIN_PCT,
  * RESPAWN_TRAPS_TICKS) live in server_internal.h — the SINGLE source of
@@ -75,6 +84,10 @@ _Static_assert((int)BOOKS_MARTIAL == SHOP_SPEC_BOOKS_MARTIAL,
 World *master_world = NULL;
 /*See server_internal.h: resolved in main() before any data access.*/
 char g_data_dir[DATA_DIR_MAX] = "data";
+/*Writable world state (world.dat, npcs.dat, artifacts.dat). Defaults to
+ * the data directory (historical layout); the graphical client's solo
+ * mode points it at the user's profile so a read-only install works.*/
+char g_state_dir[DATA_DIR_MAX] = "";
 int global_total_turns = 0;
 int active_event_type = 0;
 int event_floor_id = 1;
@@ -96,9 +109,10 @@ static void on_shutdown_signal(int sig) {
 }
 
 long long get_time_ms(void) {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+    /*Monotonic: the old gettimeofday() wall clock jumped with NTP/DST
+     * adjustments, which could stall the fixed-step game clock (or burst
+     * it) and break the per-client rate limits.*/
+    return plat_time_ms();
 }
 static char SERVER_ACCESS_PASSWORD[64] = "dragongl_secret";
 /*Dedicated password for the privileged "dm" account. Anyone who knows it
@@ -346,7 +360,11 @@ FILE *atomic_write_begin(const char *path, char *tmp, size_t tmp_size) {
     return NULL;
   if (strlen(path) + 16 > tmp_size) /*room for ".<pid>.tmp" + NUL*/
     return NULL;
+#ifdef _WIN32
+  snprintf(tmp, tmp_size, "%s.%d.tmp", path, (int)_getpid());
+#else
   snprintf(tmp, tmp_size, "%s.%d.tmp", path, (int)getpid());
+#endif
   return fopen(tmp, "wb");
 }
 
@@ -394,10 +412,10 @@ void cleanup_stale_tmp_files(const char *dir) {
  * until some first event reseeded it.*/
 static void seed_game_rng(void) {
     uint32_t seed = 0;
-    if (getrandom(&seed, sizeof(seed), 0) != sizeof(seed)) {
-        /*Fallback: mix time, pid and a stack address.*/
+    if (!plat_random_bytes(&seed, sizeof(seed))) {
+        /*Fallback: mix time, clock and a stack address.*/
         seed = (uint32_t)time(NULL) * 2654435761u;
-        seed ^= (uint32_t)getpid() * 40503u;
+        seed ^= (uint32_t)plat_time_ms() * 40503u;
         seed ^= (uint32_t)(uintptr_t)&seed;
     }
     srand(seed);
@@ -485,7 +503,7 @@ static int artifact_count = 58;
 
 static void artifacts_load(void) {
     char path[DATA_DIR_MAX + 32];
-    snprintf(path, sizeof(path), "%s/artifacts.dat", g_data_dir);
+    snprintf(path, sizeof(path), "%s/artifacts.dat", g_state_dir);
     FILE *f = fopen(path, "rb");
     if (!f)
         return;
@@ -500,7 +518,7 @@ static void artifacts_load(void) {
 
 static void artifacts_save(void) {
     char path[DATA_DIR_MAX + 32];
-    snprintf(path, sizeof(path), "%s/artifacts.dat", g_data_dir);
+    snprintf(path, sizeof(path), "%s/artifacts.dat", g_state_dir);
     /*Atomic: a crash mid-write must not truncate the artifact state.
      * The per-field fwrites are byte-identical to a single buffer, so
      * the format is unchanged.*/
@@ -1499,7 +1517,11 @@ float get_current_weight(Client *c) {
 
 float get_movement_cooldown(Client *c) {
   float w = get_current_weight(c);
-  float limit = (float)c->str * 5.0f;
+  /*Item weights in the database are POUNDS (chain mail 55, greatsword
+   * 6...): the old limit of STR x 5 treated them as kilograms, so most
+   * starting characters were encumbered from the very first step. The
+   * tabletop rule is a capacity of STR x 15 lb.*/
+  float limit = (float)c->str * 15.0f;
   if (w > limit * 2.0f) {
     return 1.0f;
   }
@@ -2336,6 +2358,8 @@ void check_level_up(Client *c) {
   }
 
   if (leveled) {
+    ui_broadcast_event(c->floor_id, GEV_LEVEL_UP, c->entity_id, c->entity_id,
+                       c->level, c->x, c->y);
     server_log("LEVELUP", "Player %s has reached level %d", c->username,
                c->level);
     save_player_data(c);
@@ -2418,6 +2442,7 @@ void print_merchant_inventory(Client *c, NPC *merchant) {
                                "----------------------------'");
   send_text_to_client(
       c->sock, "[TIP] Use 'browse <n>' for info, 'buy <n>' to purchase.");
+  ui_open_shop(c, merchant); /*graphical shop window (protocol v4)*/
 }
 
 /* handle_text_cmd has been migrated to server_commands.c */
@@ -2563,7 +2588,23 @@ int main(int argc, char **argv) {
   setvbuf(stdout, NULL, _IONBF,
           0); // Disable stdout buffering for live log files
   int server_port = 8080;
+  /*Solo mode (DragonGL+): the graphical client starts a private
+   * server for single-player. --local binds 127.0.0.1 only (nobody on
+   * the LAN can join a solo game), --stop-file makes the server shut
+   * down gracefully as soon as that file appears (portable replacement
+   * for SIGTERM, which Windows does not have for a windowless child).*/
+  bool local_only = false;
+  char stop_file[512] = "";
   for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--local") == 0) {
+      local_only = true;
+      continue;
+    }
+    if (strcmp(argv[i], "--stop-file") == 0 && i + 1 < argc) {
+      copy_str(stop_file, argv[i + 1], sizeof(stop_file));
+      i++;
+      continue;
+    }
     if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
       printf("Usage: %s [options]\n", argv[0]);
       printf("Options:\n");
@@ -2575,6 +2616,9 @@ int main(int argc, char **argv) {
       printf("  -D, --data-dir <dir>    Data directory (JSON + world.dat).\n"
              "                          Default: ./data if present, else\n"
              "                          /usr/share/dragongl/data (RPM).\n");
+      printf("  -S, --state-dir <dir>   Writable world state dir (default: data dir)\n");
+      printf("  --local                 Accept connections from this computer only\n");
+      printf("  --stop-file <path>      Shut down gracefully when <path> appears\n");
       printf("  -h, --help              Shows this help\n");
       return 0;
     }
@@ -2599,6 +2643,12 @@ int main(int argc, char **argv) {
       }
       i++;
     }
+    if ((strcmp(argv[i], "-S") == 0 || strcmp(argv[i], "--state-dir") == 0) &&
+        i + 1 < argc) {
+      copy_str(g_state_dir, argv[i + 1], sizeof(g_state_dir));
+      i++;
+      continue;
+    }
     if ((strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--data-dir") == 0) &&
         i + 1 < argc) {
       copy_str(g_data_dir, argv[i + 1], sizeof(g_data_dir));
@@ -2608,7 +2658,9 @@ int main(int argc, char **argv) {
   /*Resolve the data directory (see server_internal.h).
    * 1. explicit --data-dir (trusted as-is)
    * 2. local ./data (development layout)
-   * 3. /usr/share/dragongl/data (RPM: the server is installed in
+   * 3. <directory of the executable>/data (portable packages started
+   *    from another working directory)
+   * 4. /usr/share/dragongl/data (RPM: the server is installed in
    *    /usr/bin but the JSON data live in the data subpackage)*/
   {
     bool explicit_dir = (strlen(g_data_dir) > 0 &&
@@ -2616,6 +2668,14 @@ int main(int argc, char **argv) {
     if (!explicit_dir) {
       char probe[DATA_DIR_MAX + 32];
       struct stat st;
+      snprintf(probe, sizeof(probe), "%s/bestiary.json", g_data_dir);
+      char exe_dir[DATA_DIR_MAX];
+      if (stat(probe, &st) != 0 && plat_exe_dir(exe_dir, sizeof(exe_dir))) {
+        char cand[DATA_DIR_MAX];
+        snprintf(cand, sizeof(cand), "%.*s/data", (int)sizeof(cand) - 8, exe_dir);
+        snprintf(probe, sizeof(probe), "%s/bestiary.json", cand);
+        if (stat(probe, &st) == 0) copy_str(g_data_dir, cand, sizeof(g_data_dir));
+      }
       snprintf(probe, sizeof(probe), "%s/bestiary.json", g_data_dir);
       if (stat(probe, &st) != 0) {
         const char *sys_dir = "/usr/share/dragongl/data";
@@ -2628,6 +2688,10 @@ int main(int argc, char **argv) {
   }
   /*Seed the RNG BEFORE anything else: even when a world is loaded from
    * disk (world_init skipped), dice must not run on the default seed.*/
+  if (g_state_dir[0] == '\0')
+    copy_str(g_state_dir, g_data_dir, sizeof(g_state_dir));
+  else
+    plat_mkdirs(g_state_dir);
   seed_game_rng();
   if (strcmp(SERVER_ACCESS_PASSWORD, "dragongl_secret") == 0) {
     server_log("SYS",
@@ -2645,13 +2709,20 @@ int main(int argc, char **argv) {
   server_log("SYS", "Tactical log opened: combat_log.json");
   /* Ctrl-C / kill: request a graceful shutdown instead of the default
    * immediate termination (which would leave combat_log.json truncated).*/
+  plat_net_init(); /*WSAStartup / ignore SIGPIPE (see platform.c)*/
+#ifdef _WIN32
+  signal(SIGINT, on_shutdown_signal);
+  signal(SIGTERM, on_shutdown_signal);
+  signal(SIGBREAK, on_shutdown_signal);
+#else
   struct sigaction sa;
   memset(&sa, 0, sizeof(sa));
   sa.sa_handler = on_shutdown_signal;
   sigemptyset(&sa.sa_mask);
   sigaction(SIGINT, &sa, NULL);
   sigaction(SIGTERM, &sa, NULL);
-  int s_sock = net_create_server(server_port);
+#endif
+  int s_sock = net_create_server_ex(server_port, local_only);
   if (s_sock < 0) {
     server_log("SYS", "Cannot bind to port %d", server_port);
     clog_close();
@@ -2659,8 +2730,8 @@ int main(int argc, char **argv) {
   }
   server_log("SYS", "Listening on port %d", server_port);
   net_set_nonblocking(s_sock);
-  int epoll_fd = epoll_create1(0);
-  if (epoll_fd == -1) {
+  epoll_handle_t epoll_fd = epoll_create1(0);
+  if (EPOLL_INVALID(epoll_fd)) {
     server_log("SYS", "Cannot create epoll");
     return 1;
   }
@@ -2708,7 +2779,7 @@ int main(int argc, char **argv) {
    * alive, and a stale <user>.save.<pid>.tmp would otherwise show up
    * in the 'top' leaderboard scan.*/
   cleanup_stale_tmp_files("saves");
-  cleanup_stale_tmp_files(g_data_dir);
+  cleanup_stale_tmp_files(g_state_dir);
 
   tombstone_load_all();
   server_log("SYS", "Tombstone System initialized.");
@@ -2723,8 +2794,8 @@ int main(int argc, char **argv) {
   }
 
   char world_path[DATA_DIR_MAX + 32], npcs_path[DATA_DIR_MAX + 32];
-  snprintf(world_path, sizeof(world_path), "%s/world.dat", g_data_dir);
-  snprintf(npcs_path, sizeof(npcs_path), "%s/npcs.dat", g_data_dir);
+  snprintf(world_path, sizeof(world_path), "%s/world.dat", g_state_dir);
+  snprintf(npcs_path, sizeof(npcs_path), "%s/npcs.dat", g_state_dir);
 
   /*npcs.dat format (single, versioned):
    *   [magic:uint32 0xDEAD7ECC][count:int][NPC x count][next_id:int][turns:int]
@@ -2827,7 +2898,7 @@ int main(int argc, char **argv) {
       if (!atomic_write_end(fn, npcs_path, tmp, ok))
         server_log("SYS", "WARNING: failed to save npcs.dat (fresh world) — previous file kept.");
     }
-    server_log("SYS", "World generated and saved in %s/.", g_data_dir);
+    server_log("SYS", "World generated and saved in %s/.", g_state_dir);
   }
 
   sync_entity_grid(npcs);
@@ -2846,7 +2917,20 @@ int main(int argc, char **argv) {
    * drops the excess game time instead of fast-forwarding.*/
   long long last_iter_ms = 0;
   long long tick_acc_ms = 0;
+  long long last_stop_check_ms = 0;
   while (!g_shutdown_requested) {
+    if (stop_file[0]) {
+      long long t_ms = get_time_ms();
+      if (t_ms - last_stop_check_ms >= 250) {
+        last_stop_check_ms = t_ms;
+        if (plat_path_exists(stop_file)) {
+          remove(stop_file);
+          server_log("SYS", "Stop file found: shutting down.");
+          g_shutdown_requested = 1;
+          break;
+        }
+      }
+    }
     /*Timeout = TICK_MS/2 (100 ms). The old 5 ms woke the loop 200 times
      * per second even with ZERO connected clients, for no gain: the
      * simulation below runs on a fixed-step accumulator (TICK_MS) that
@@ -2859,15 +2943,20 @@ int main(int argc, char **argv) {
       for (int ev_idx = 0; ev_idx < n_events; ev_idx++) {
         uint32_t id = ep_events[ev_idx].data.u32;
         if (id == MAX_CLIENTS) {
-          int cs = accept(s_sock, NULL, NULL);
+          int cs = (int)accept(s_sock, NULL, NULL);
           if (cs >= 0) {
             net_set_nonblocking(cs);
+            bool placed = false;
             for (int i = 0; i < MAX_CLIENTS; i++)
               if (!clients[i].active) {
+                placed = true;
                 clients[i].sock = cs;
                 clients[i].active = true;
+                clients[i].last_action_ms = 0;
+                clients[i].cmd_tat_ms = 0;
                 clients[i].authenticated = false;
                 client_seen_reset(i, -1);
+                ui_sync_reset(i);
                 server_log("NET", "Client %d connected on socket %d", i, cs);
                 
                 struct epoll_event client_ev;
@@ -2877,6 +2966,12 @@ int main(int argc, char **argv) {
                 
                 break;
               }
+            if (!placed) {
+              /*Server full: the socket used to leak (never closed,
+               * never polled) and the client hung on "connecting".*/
+              server_log("NET", "Server full (%d clients): connection refused", MAX_CLIENTS);
+              net_close(cs);
+            }
           }
         } else {
           int i = id;
@@ -3122,6 +3217,25 @@ int main(int argc, char **argv) {
               }
 
               give_starting_gear(&clients[i]);
+              /*New heroes start with their kit EQUIPPED (DragonGL+):
+               * before, a new fighter walked out with bare hands and no
+               * armor until the player discovered the 'wield' command.
+               * Uses the regular command so every equip rule applies.*/
+              for (int guard = 0; guard < 6; guard++) {
+                int idx = -1;
+                for (int b = 0; b < clients[i].backpack_count; b++) {
+                  int t = clients[i].backpack[b].template_idx;
+                  if (t < 0 || t >= item_database_size) continue;
+                  ItemCategory cat = item_database[t].category;
+                  if (cat == ITEM_WEAPON || cat == ITEM_ARMOR || cat == ITEM_SHIELD) { idx = b; break; }
+                }
+                if (idx < 0) break;
+                char wcmd[16];
+                snprintf(wcmd, sizeof(wcmd), "w %d", idx + 1);
+                int before = clients[i].backpack_count;
+                handle_text_cmd(&clients[i], wcmd, npcs);
+                if (clients[i].backpack_count >= before) break; /*refused: stop*/
+              }
             }
 
             //Send welcome with current location (saved or default)
@@ -3434,15 +3548,28 @@ int main(int argc, char **argv) {
              * written but never tested, so a client spamming 'top', 'cast'
              * or 'look' at 10 kHz saturated the server CPU (every 'top'
              * opens, reads and qsorts each save file).*/
+            /*Own token bucket (see Client.cmd_tat_ms): a burst of
+             * CMD_BURST commands, then CMD_INTERVAL_MS apart — still
+             * caps a spammer at ~7 commands/s, but a click right after a
+             * step is no longer silently dropped.*/
+            enum { CMD_INTERVAL_MS = 150, CMD_BURST = 6 };
             long long now_ms = get_time_ms();
-            if (now_ms - clients[i].last_action_ms < 200) {
-              continue; //Rate limit: max 5 text commands per second
+            if (clients[i].cmd_tat_ms < now_ms)
+              clients[i].cmd_tat_ms = now_ms;
+            if (clients[i].cmd_tat_ms - now_ms > (long long)CMD_INTERVAL_MS * CMD_BURST) {
+              send_text_to_client(clients[i].sock,
+                                  "[SYSTEM] Too many commands at once - slow down.");
+              continue;
             }
-            clients[i].last_action_ms = now_ms;
+            clients[i].cmd_tat_ms += CMD_INTERVAL_MS;
             /*cmd is a fixed-size array, but make sure it is terminated
              * (a malicious client could omit the NUL).*/
             tc.cmd[sizeof(tc.cmd) - 1] = '\0';
             handle_text_cmd(&clients[i], tc.cmd, npcs);
+            /*Structured UI mirror (inventory/spellbook/shop), sent only
+             * when something actually changed.*/
+            if (clients[i].active && clients[i].authenticated)
+              ui_sync_client(&clients[i]);
           }
         }
     }
@@ -3462,6 +3589,13 @@ int main(int argc, char **argv) {
       update_world(clients, npcs);
       tick_acc_ms -= TICK_MS;
     }
+  }
+  /*Graceful shutdown: persist every connected player (the periodic
+   * autosave covers the world; a player's last steps since their last
+   * save used to be lost on Ctrl-C).*/
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (clients[i].active && clients[i].authenticated)
+      save_player_data(&clients[i]);
   }
   clog_close();
   server_log("SYS", "Server shut down. Log saved.");

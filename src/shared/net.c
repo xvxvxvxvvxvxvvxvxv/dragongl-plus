@@ -18,42 +18,59 @@
  */
 
 #include "net.h"
+#include "platform.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#ifndef _WIN32
 #include <unistd.h>
 #include <fcntl.h>
+#include <netdb.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include <sys/select.h>
+#endif
 
 int net_create_server(int port) {
+    return net_create_server_ex(port, false);
+}
+
+int net_create_server_ex(int port, bool loopback_only) {
     int sock;
     struct sockaddr_in addr;
     int opt;
     
-    sock = socket(AF_INET, SOCK_STREAM, 0);
+    plat_net_init();
+    sock = (int)socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         return -1;
     }
     
     opt = 1;
+#ifdef _WIN32
+    /*SO_REUSEADDR on Windows lets ANOTHER process steal the port: use
+     * the exclusive flavour instead.*/
+    setsockopt(sock, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char *)&opt, sizeof(opt));
+#else
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#endif
     
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_addr.s_addr = loopback_only ? htonl(INADDR_LOOPBACK) : INADDR_ANY;
     addr.sin_port = htons(port);
     
     if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         perror("bind");
-        close(sock);
+        plat_sock_close(sock);
         return -1;
     }
     
     if (listen(sock, 10) < 0) {
-        close(sock);
+        plat_sock_close(sock);
         return -1;
     }
     
@@ -61,32 +78,39 @@ int net_create_server(int port) {
 }
 
 int net_connect_to_server(const char *ip, int port) {
-    int sock;
-    struct sockaddr_in addr;
-    
-    sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) {
+    /*getaddrinfo instead of inet_pton: the player can now type a host
+     * NAME (e.g. "myserver.lan") as well as a dotted IPv4 address.*/
+    struct addrinfo hints, *res = NULL, *ai;
+    char port_str[16];
+    int sock = -1;
+
+    plat_net_init();
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    snprintf(port_str, sizeof(port_str), "%d", port);
+    if (getaddrinfo(ip, port_str, &hints, &res) != 0 || !res) {
         return -1;
     }
-    
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    inet_pton(AF_INET, ip, &addr.sin_addr);
-    
-    if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        close(sock);
-        return -1;
+    for (ai = res; ai; ai = ai->ai_next) {
+        sock = (int)socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (sock < 0) continue;
+        if (connect(sock, ai->ai_addr, (int)ai->ai_addrlen) == 0) {
+            /*Small, latency-sensitive messages (moves, commands): no
+             * Nagle batching.*/
+            int one = 1;
+            setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof(one));
+            break;
+        }
+        plat_sock_close(sock);
+        sock = -1;
     }
-    
+    freeaddrinfo(res);
     return sock;
 }
 
 void net_set_nonblocking(int sock) {
-    int flags;
-    
-    flags = fcntl(sock, F_GETFL, 0);
-    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+    plat_sock_set_nonblocking(sock);
 }
 
 /*True if the send()/recv() error is TRANSIENT (retry after a short
@@ -95,8 +119,8 @@ void net_set_nonblocking(int sock) {
  * only spin the caller for the whole retry budget (~1 s) for nothing.
  * Callers that must drop a client on the first failure (server
  * net_send_client) rely on this distinction.*/
-static bool net_err_is_transient(int err) {
-    return err == EAGAIN || err == EWOULDBLOCK || err == EINTR;
+static bool net_err_is_transient(void) {
+    return plat_sock_would_block();
 }
 
 bool net_send(int sock, const void *data, int len) {
@@ -117,17 +141,17 @@ bool net_send(int sock, const void *data, int len) {
         return false;
 
     while (total < len && retries < max_retries) {
-        int sent = send(sock, buf + total, len - total, 0);
+        int sent = (int)send(sock, buf + total, len - total, MSG_NOSIGNAL);
         if (sent > 0) {
             total += sent;
             retries = 0;
         } else if (sent == 0) {
             return false;
         } else {
-            if (!net_err_is_transient(errno))
+            if (!net_err_is_transient())
                 return false; /*peer closed / bad fd: don't spin ~1s*/
             retries++;
-            usleep(10000);
+            plat_sleep_ms(10);
         }
     }
 
@@ -137,7 +161,7 @@ bool net_send(int sock, const void *data, int len) {
 int net_receive(int sock, void *buffer, int max_len) {
     int bytes;
     
-    bytes = recv(sock, buffer, max_len, 0);
+    bytes = (int)recv(sock, buffer, max_len, 0);
     
     return bytes;
 }
@@ -153,17 +177,17 @@ int net_receive_exact(int sock, void *buffer, int len) {
     char *buf = (char *)buffer;
 
     while (total < len && retries < max_retries) {
-        int bytes = recv(sock, buf + total, len - total, 0);
+        int bytes = (int)recv(sock, buf + total, len - total, 0);
         if (bytes > 0) {
             total += bytes;
             retries = 0;
         } else if (bytes == 0) {
             return -1; /* peer closed */
         } else {
-            if (!net_err_is_transient(errno))
+            if (!net_err_is_transient())
                 return -1;
             retries++;
-            usleep(10000);
+            plat_sleep_ms(10);
         }
     }
 
@@ -187,8 +211,87 @@ void copy_str(char *dst, const char *src, size_t cap) {
     dst[n] = '\0';
 }
 
+int net_wait_readable(int sock, int timeout_ms) {
+    fd_set rf;
+    struct timeval tv;
+    if (sock < 0) return -1;
+    FD_ZERO(&rf);
+    FD_SET(sock, &rf);
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    int r = select(sock + 1, &rf, NULL, NULL, &tv);
+    if (r < 0) return plat_sock_would_block() ? 0 : -1;
+    return r > 0 ? 1 : 0;
+}
+
+bool net_peek_closed(int sock) {
+    char c;
+    int r = (int)recv(sock, &c, 1, MSG_PEEK);
+    if (r == 0) return true;
+    if (r < 0) return !plat_sock_would_block();
+    return false;
+}
+
+int net_connect_timeout(const char *host, int port, int timeout_ms, char *err, size_t err_len) {
+    struct addrinfo hints, *res = NULL, *ai;
+    char port_str[16];
+    int sock = -1;
+
+    plat_net_init();
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    snprintf(port_str, sizeof(port_str), "%d", port);
+    if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
+        if (err) snprintf(err, err_len, "Unknown host '%s'.", host);
+        return -1;
+    }
+    if (err) snprintf(err, err_len, "Cannot reach %s:%d (no server listening?).", host, port);
+    for (ai = res; ai; ai = ai->ai_next) {
+        sock = (int)socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (sock < 0) continue;
+        plat_sock_set_nonblocking(sock);
+        int r = connect(sock, ai->ai_addr, (int)ai->ai_addrlen);
+        bool ok = (r == 0);
+        if (!ok) {
+#ifdef _WIN32
+            bool pending = WSAGetLastError() == WSAEWOULDBLOCK;
+#else
+            bool pending = errno == EINPROGRESS;
+#endif
+            if (pending) {
+                fd_set wf, ef;
+                struct timeval tv;
+                FD_ZERO(&wf);
+                FD_ZERO(&ef);
+                FD_SET(sock, &wf);
+                FD_SET(sock, &ef);
+                tv.tv_sec = timeout_ms / 1000;
+                tv.tv_usec = (timeout_ms % 1000) * 1000;
+                if (select(sock + 1, NULL, &wf, &ef, &tv) > 0 && FD_ISSET(sock, &wf)) {
+                    int so_err = 0;
+                    socklen_t len = sizeof(so_err);
+                    getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&so_err, &len);
+                    ok = (so_err == 0);
+                } else if (err) {
+                    snprintf(err, err_len, "Connection to %s:%d timed out.", host, port);
+                }
+            }
+        }
+        if (ok) {
+            int one = 1;
+            setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof(one));
+            break;
+        }
+        plat_sock_close(sock);
+        sock = -1;
+    }
+    freeaddrinfo(res);
+    return sock; /*still NON-BLOCKING*/
+}
+
 void net_close(int sock) {
-    close(sock);
+    plat_sock_close(sock);
 }
 
 /*Read exactly 'len' bytes on a non-blocking socket,
@@ -202,7 +305,7 @@ int net_receive_all(int sock, void *buffer, int len) {
     char *buf = (char *)buffer;
     
     while (total < len && retries < max_retries) {
-        int bytes = recv(sock, buf + total, len - total, 0);
+        int bytes = (int)recv(sock, buf + total, len - total, 0);
         if (bytes > 0) {
             total = total + bytes;
             retries = 0;
@@ -211,10 +314,10 @@ int net_receive_all(int sock, void *buffer, int len) {
             return -1;
         } else {
             /* EAGAIN / EWOULDBLOCK (retry); anything else is a dead peer */
-            if (!net_err_is_transient(errno))
+            if (!net_err_is_transient())
                 return -1;
             retries = retries + 1;
-            usleep(10000);
+            plat_sleep_ms(10);
         }
     }
     

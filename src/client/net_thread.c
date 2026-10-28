@@ -2,7 +2,7 @@
  * DRAGON GL - 3D ARCANE ENGINE
  * Copyright (C) 2026 Nicola Taibi
  * License: GPL-3.0-or-later
- * 
+ *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
@@ -17,364 +17,420 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+/*Network receive loop: parses every server message into the shared
+ * client state (client_state.h) and the event queue.
+ *
+ * Unchanged invariants from the original client: header version and
+ * type/length are validated BEFORE any payload is read (a mismatched
+ * or malicious peer is dropped instead of desynchronising the stream),
+ * and every server-provided size is bounds-checked before allocating.*/
+
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <pthread.h>
 #include <string.h>
+#include <pthread.h>
 #include "client_state.h"
-#include "client_fct.h"
-/*Atomic: shared between the net thread (sets, under g_state_mutex) and
- * the VK render thread (reads/clears, without the lock) — see the
- * declaration in client_state.h.*/
-atomic_bool g_map_dirty = false;
-#include "client_minimap.h"
-#include "client_particles.h"
+#include "session.h"
+#include "platform.h"
 #include "protocol.h"
 #include "net.h"
 
-/*True if the message type/payload size pair is coherent.
- * A mismatched length (buggy or malicious server) would desync the whole
- * protocol stream — every following message would be parsed as garbage.
- * On mismatch the client disconnects instead of rendering garbage.*/
 static bool valid_msg(MsgType type, int length) {
     switch (type) {
     case MSG_WELCOME:          return length == sizeof(MsgWelcome);
     case MSG_STATE:            return length == sizeof(MsgState);
-    case MSG_MAP_CHUNK:        return (size_t)length >= sizeof(MsgMapChunk); /*+ w*h*VoxelType, checked later*/
+    case MSG_MAP_CHUNK:        return (size_t)length >= sizeof(MsgMapChunk);
     case MSG_TEXT_CMD:         return length == sizeof(MsgTextCmd);
     case MSG_TEXT:             return length == sizeof(MsgText);
     case MSG_AUTH_FAIL:        return length == sizeof(MsgAuthFail);
     case MSG_SPELL_VFX:        return length == sizeof(MsgSpellVFX);
     case MSG_TOMBSTONE_REMOVE: return length == sizeof(MsgTombstoneRemove);
     case MSG_TIME_SYNC:        return length == sizeof(MsgTimeSync);
-    /*[int32 count][EntityUpdateRec count]: the exact size is validated
-     * against count in the handler (count comes from the payload).*/
     case MSG_ENTITY_UPDATE:    return length >= (int)sizeof(int32_t);
-    default:                    return false;
+    case MSG_INVENTORY:        return length == sizeof(MsgInventory);
+    case MSG_SHOP:             return length == sizeof(MsgShop);
+    case MSG_SPELLBOOK:        return length == sizeof(MsgSpellbook);
+    case MSG_GAME_EVENT:       return length == sizeof(MsgGameEvent);
+    default:                   return false;
     }
 }
 
-void* net_thread_loop(void* arg) {
-    MsgHeader hdr;
-    MsgWelcome msg_wel;
-    MsgState msg_state;
-    MsgMapChunk msg_chunk;
-    MsgText msg_txt;
-    MsgAuthFail msg_fail;
-    TileType *chunk_buf;
-    int bytes;
-    int chunk_size;
-    int i, cx, cy;
-    static int last_floor = -1;
-    
-    (void)arg;
-    
-    while (g_running) {
-        /*net_receive_exact: a raw recv() could return a PARTIAL header
-         * (fewer than sizeof(MsgHeader) bytes), which used to be treated
-         * as a complete (corrupted) header.*/
-        bytes = net_receive_exact(g_server_sock, &hdr, sizeof(MsgHeader));
-        if (bytes > 0) {
-            /*Version first: a mismatched build (old client + new server)
-             * must fail fast, not parse garbage for a while.*/
-            if (hdr.version != PROTOCOL_VERSION) {
-                fprintf(stderr, "[NET] Protocol error: server speaks protocol version %u, this client expects %u — disconnecting.\n",
-                        hdr.version, PROTOCOL_VERSION);
-                g_running = false;
-                break;
-            }
-            if (!valid_msg(hdr.type, hdr.length)) {
-                fprintf(stderr, "[NET] Protocol error: bad message (type %u, length %d) — disconnecting.\n",
-                        hdr.type, hdr.length);
-                g_running = false;
-                break;
-            }
-            if (hdr.type == MSG_WELCOME) {
-                if (net_receive_all(g_server_sock, &msg_wel, sizeof(MsgWelcome)) > 0) {
-                    pthread_mutex_lock(&g_state_mutex);
-                    g_my_entity_id = msg_wel.entity_id;
-                    g_my_x = msg_wel.x; g_my_y = msg_wel.y;
-                    g_my_hp = msg_wel.hp; g_my_max_hp = msg_wel.max_hp;
-                    g_my_gold = msg_wel.gold;
-                    g_my_level = msg_wel.level;
-                    g_race_id = msg_wel.race_id;
-                    g_subrace_id = msg_wel.subrace_id;
-                    g_class_id = msg_wel.class_id;
-                    g_alignment = msg_wel.alignment;
-                    pthread_mutex_unlock(&g_state_mutex);
-                    printf("\n[NET] Authentication completed!\n[STAT] HP: %d/%d | Gold: %lu\n>", msg_wel.hp, msg_wel.max_hp, (unsigned long)msg_wel.gold);
-                    fflush(stdout);
-                }
-            } else if (hdr.type == MSG_AUTH_FAIL) {
-                if (net_receive_all(g_server_sock, &msg_fail, sizeof(MsgAuthFail)) > 0) {
-                    printf("\n[NET] Authentication failed: %s\n", msg_fail.reason);
-                    g_running = false;
-                }
-            } else if (hdr.type == MSG_STATE) {
-                if (net_receive_all(g_server_sock, &msg_state, sizeof(MsgState)) > 0) {
-                    pthread_mutex_lock(&g_state_mutex);
-                    if (last_floor != -1 && last_floor != msg_state.floor_id) {
-                        for(int ly=0; ly<MAP_HEIGHT; ly++) {
-                            for(int lx=0; lx<MAP_WIDTH; lx++) {
-                                g_local_map[ly][lx] = VOXEL_ROCK;
-                            }
-                        }
-                        //Cleans ALL entities on plan change
-                        for(int li=0; li<CLIENT_MAX_ENTITIES; li++) {
-                            g_entities[li].active = false;
-                            g_entities[li].id = 0;
-                            g_entities[li].floor_id = -1;
-                        }
-                        minimap_reset();
-                    }
-                    last_floor = msg_state.floor_id;
-                    if (msg_state.entity_id == g_my_entity_id) {
-                        g_my_x = msg_state.x; g_my_y = msg_state.y;
-                        g_my_hp = msg_state.hp; g_my_max_hp = msg_state.max_hp;
-                        g_game_h = msg_state.game_hour; g_game_m = msg_state.game_min;
-                        g_total_turns = msg_state.total_turns;
-                        g_str = msg_state.str; g_dex = msg_state.dex; g_con = msg_state.con;
-                        g_intel = msg_state.intel; g_wis = msg_state.wis; g_cha = msg_state.cha;
-                        g_movement_cooldown = msg_state.movement_cooldown;
-                        g_equipped_mask = msg_state.equipped_mask;
-                        g_my_level = msg_state.level;
-                        g_my_xp = msg_state.xp;
-                        g_my_gold = msg_state.gold;
-                        g_my_ac = msg_state.ac;
-                        g_my_floor = msg_state.floor_id;
-                        g_vision_radius = msg_state.vision_radius;
-                        copy_str(g_weapon_name, msg_state.weapon_name, sizeof(g_weapon_name));
-                        copy_str(g_armor_name, msg_state.armor_name, sizeof(g_armor_name));
-                        g_to_hit = msg_state.to_hit;
-                        g_to_dmg = msg_state.to_dmg;
-                        g_bosses_defeated = msg_state.bosses_defeated;
-                        g_status_icons = msg_state.status_icons;
-                        g_hunger_level = msg_state.hunger_level;
-                        for (int i = 0; i < 10; i++) {
-                            g_my_spell_slots[i] = msg_state.spell_slots[i];
-                            g_my_spell_slots_max[i] = msg_state.spell_slots_max[i];
-                        }
-                        copy_str(g_eq_head, msg_state.eq_head, sizeof(g_eq_head));
-                        copy_str(g_eq_neck, msg_state.eq_neck, sizeof(g_eq_neck));
-                        copy_str(g_eq_body, msg_state.eq_body, sizeof(g_eq_body));
-                        copy_str(g_eq_back, msg_state.eq_back, sizeof(g_eq_back));
-                        copy_str(g_eq_hand_r, msg_state.eq_hand_r, sizeof(g_eq_hand_r));
-                        copy_str(g_eq_hand_l, msg_state.eq_hand_l, sizeof(g_eq_hand_l));
-                        copy_str(g_eq_hands, msg_state.eq_hands, sizeof(g_eq_hands));
-                        copy_str(g_eq_arm_r, msg_state.eq_arm_r, sizeof(g_eq_arm_r));
-                        copy_str(g_eq_arm_l, msg_state.eq_arm_l, sizeof(g_eq_arm_l));
-                        copy_str(g_eq_feet, msg_state.eq_feet, sizeof(g_eq_feet));
-                        for (int i = 0; i < 10; i++) {
-                            copy_str(g_eq_ring[i], msg_state.eq_ring[i], sizeof(g_eq_ring[0]));
-                        }
-                        for (int i = 0; i < 4; i++) {
-                            copy_str(g_eq_belt[i], msg_state.eq_belt[i], sizeof(g_eq_belt[0]));
-                        }
-                    } else {
-                        //It's an NPC, tombstone, or other player
-                        if (msg_state.floor_id != g_my_floor) {
-                            pthread_mutex_unlock(&g_state_mutex);
-                            continue;
-                        }
-                        if (msg_state.hp <= 0) {
-                            //The entity died or left this floor (stairs,
-                            //teleport, disconnect): remove it, so it no
-                            //longer renders (shared by GL and Vulkan)
-                            for(int i=0; i<CLIENT_MAX_ENTITIES; i++) {
-                                if (g_entities[i].id == msg_state.entity_id) {
-                                    g_entities[i].active   = false;
-                                    g_entities[i].id       = 0;
-                                    g_entities[i].floor_id = -1;
-                                    break;
-                                }
-                            }
-                            pthread_mutex_unlock(&g_state_mutex);
-                            continue;
-                        }
-                        bool found = false;
-                        for(int i=0; i<CLIENT_MAX_ENTITIES; i++) {
-                            if (g_entities[i].id == msg_state.entity_id) {
-                                g_entities[i].x           = msg_state.x;
-                                g_entities[i].y           = msg_state.y;
-                                g_entities[i].hp          = msg_state.hp;
-                                g_entities[i].floor_id    = msg_state.floor_id;
-                                g_entities[i].active      = true;
-                                g_entities[i].is_merchant  = (msg_state.is_merchant  != 0);
-                                g_entities[i].shop_spec    = msg_state.shop_spec;
-                                g_entities[i].is_tombstone = (msg_state.is_tombstone != 0);
-                                g_entities[i].is_player = (msg_state.is_player != 0);
-                                copy_str(g_entities[i].username, msg_state.username, sizeof(g_entities[i].username));
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            /*FEATURE LIMIT (L5, see CLIENT_MAX_ENTITIES in
-                             * client_state.h): if all 512 cache slots are
-                             * active, there is NO free slot and this new
-                             * entity is SILENTLY DROPPED — it simply never
-                             * renders on this client. Acceptable for a LAN
-                             * game (planes rarely exceed a few dozen visible
-                             * entities, and the cache is flushed whole on
-                             * floor change), but documented on purpose: a
-                             * "missing NPC/player on a packed plane" report
-                             * means the cache overflowed, not a network
-                             * bug.*/
-                            for(int i=0; i<CLIENT_MAX_ENTITIES; i++) {
-                                if (!g_entities[i].active) {
-                                    g_entities[i].id          = msg_state.entity_id;
-                                    g_entities[i].x           = msg_state.x;
-                                    g_entities[i].y           = msg_state.y;
-                                    g_entities[i].hp          = msg_state.hp;
-                                    g_entities[i].floor_id    = msg_state.floor_id;
-                                    g_entities[i].active      = true;
-                                    g_entities[i].is_merchant  = (msg_state.is_merchant  != 0);
-                                    g_entities[i].shop_spec    = msg_state.shop_spec;
-                                    g_entities[i].is_tombstone = (msg_state.is_tombstone != 0);
-                                g_entities[i].is_player = (msg_state.is_player != 0);
-                                    copy_str(g_entities[i].username, msg_state.username, sizeof(g_entities[i].username));
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    pthread_mutex_unlock(&g_state_mutex);
+static void fail(NetStatus st, const char *why) {
+    pthread_mutex_lock(&g_state_mutex);
+    copy_str(g_net_error, why, sizeof(g_net_error));
+    pthread_mutex_unlock(&g_state_mutex);
+    atomic_store(&g_net_status, st);
+}
 
+static void push_simple(int kind, int value, int x, int y) {
+    ClientEvent e;
+    memset(&e, 0, sizeof(e));
+    e.kind = kind;
+    e.value = value;
+    e.x = x;
+    e.y = y;
+    evq_push(&e);
+}
+
+static void clear_floor_locked(void) {
+    for (int y = 0; y < MAP_HEIGHT; y++)
+        for (int x = 0; x < MAP_WIDTH; x++) g_local_map[y][x] = VOXEL_ROCK;
+    for (int i = 0; i < CLIENT_MAX_ENTITIES; i++) {
+        g_entities[i].active = false;
+        g_entities[i].id = 0;
+        g_entities[i].floor_id = -1;
+    }
+    atomic_fetch_add(&g_map_version, 1);
+    g_map_dirty = true;
+}
+
+static void entity_from_state(Entity *e, const MsgState *s) {
+    e->id = s->entity_id;
+    e->x = s->x;
+    e->y = s->y;
+    e->hp = s->hp;
+    e->max_hp = s->max_hp > 0 ? s->max_hp : (s->hp > 0 ? s->hp : 1);
+    e->floor_id = s->floor_id;
+    e->active = true;
+    e->killed_at_ms = 0;
+    e->is_merchant = s->is_merchant != 0;
+    e->shop_spec = s->shop_spec;
+    e->is_tombstone = s->is_tombstone != 0;
+    e->is_player = s->is_player != 0;
+    copy_str(e->username, s->username, sizeof(e->username));
+    e->kind = s->kind;
+    if (e->is_tombstone) e->kind = KIND_TOMBSTONE;
+    else if (e->is_player) e->kind = KIND_PLAYER;
+    else if (e->is_merchant) e->kind = KIND_MERCHANT;
+    e->archetype = s->archetype;
+    e->level = s->npc_level;
+    e->race_id = s->race_id;
+    e->class_id = s->class_id;
+    e->look_seed = s->look_seed;
+}
+
+static void handle_own_state(const MsgState *s) {
+    /*Deltas for feedback (sounds, floating numbers)*/
+    if (g_my_entity_id >= 0) {
+        long long dg = (long long)s->gold - (long long)g_my_gold;
+        if (dg != 0) push_simple(CEV_GOLD_DELTA, (int)dg, s->x, s->y);
+        int dh = s->hp - g_my_hp;
+        if (dh != 0 && s->floor_id == g_my_floor) push_simple(CEV_HP_DELTA, dh, s->x, s->y);
+        int dx = s->xp - g_my_xp;
+        if (dx > 0) push_simple(CEV_XP_DELTA, dx, s->x, s->y);
+    }
+    g_my_x = s->x;
+    g_my_y = s->y;
+    g_my_hp = s->hp;
+    g_my_max_hp = s->max_hp;
+    g_game_h = s->game_hour;
+    g_game_m = s->game_min;
+    g_total_turns = s->total_turns;
+    g_str = s->str; g_dex = s->dex; g_con = s->con;
+    g_intel = s->intel; g_wis = s->wis; g_cha = s->cha;
+    g_movement_cooldown = s->movement_cooldown;
+    g_equipped_mask = s->equipped_mask;
+    g_my_level = s->level;
+    g_my_xp = s->xp;
+    g_my_xp_next = s->xp_next;
+    g_stat_points = s->stat_points;
+    g_max_floor = s->max_floor;
+    g_my_gold = s->gold;
+    g_my_ac = s->ac;
+    g_my_floor = s->floor_id;
+    g_vision_radius = s->vision_radius;
+    copy_str(g_weapon_name, s->weapon_name, sizeof(g_weapon_name));
+    copy_str(g_armor_name, s->armor_name, sizeof(g_armor_name));
+    g_to_hit = s->to_hit;
+    g_to_dmg = s->to_dmg;
+    g_bosses_defeated = s->bosses_defeated;
+    g_status_icons = s->status_icons;
+    g_hunger_level = s->hunger_level;
+    for (int i = 0; i < 10; i++) {
+        g_my_spell_slots[i] = s->spell_slots[i];
+        g_my_spell_slots_max[i] = s->spell_slots_max[i];
+    }
+    if (s->username[0]) copy_str(g_my_name, s->username, sizeof(g_my_name));
+    g_race_id = s->race_id;
+    g_class_id = s->class_id;
+}
+
+void *net_thread_loop(void *arg) {
+    (void)arg;
+    MsgHeader hdr;
+    static MsgState st;
+    static MsgInventory inv;
+    static MsgSpellbook book;
+    static MsgShop shop;
+    int last_floor = -1;
+
+    while (g_running && !session_stop_requested()) {
+        /*Wait (bounded) for data so a stop request is noticed quickly,
+         * then make sure the peer did not simply close the socket.*/
+        int r = net_wait_readable(g_server_sock, 100);
+        if (r == 0) continue;
+        if (r < 0 || net_peek_closed(g_server_sock)) {
+            fail(NET_DISCONNECTED, "The server closed the connection.");
+            break;
+        }
+        int bytes = net_receive_exact(g_server_sock, &hdr, sizeof(MsgHeader));
+        if (bytes < 0) {
+            fail(NET_DISCONNECTED, "Connection lost.");
+            break;
+        }
+        if (hdr.version != PROTOCOL_VERSION) {
+            char why[160];
+            snprintf(why, sizeof(why),
+                     "Protocol mismatch: server v%u, client v%u. Update both to the same release.",
+                     hdr.version, PROTOCOL_VERSION);
+            fail(NET_FAILED, why);
+            break;
+        }
+        if (!valid_msg(hdr.type, hdr.length)) {
+            fail(NET_FAILED, "Protocol error (bad message) - disconnected.");
+            break;
+        }
+
+        switch (hdr.type) {
+        case MSG_WELCOME: {
+            MsgWelcome w;
+            if (net_receive_all(g_server_sock, &w, sizeof(w)) <= 0) goto io_error;
+            pthread_mutex_lock(&g_state_mutex);
+            g_my_entity_id = w.entity_id;
+            g_my_x = w.x;
+            g_my_y = w.y;
+            g_my_hp = w.hp;
+            g_my_max_hp = w.max_hp;
+            g_my_gold = w.gold;
+            g_my_level = w.level;
+            g_race_id = w.race_id;
+            g_subrace_id = w.subrace_id;
+            g_class_id = w.class_id;
+            g_alignment = w.alignment;
+            push_simple(CEV_WELCOME, w.is_new, w.x, w.y);
+            pthread_mutex_unlock(&g_state_mutex);
+            atomic_store(&g_net_status, NET_ONLINE);
+            break;
+        }
+        case MSG_AUTH_FAIL: {
+            MsgAuthFail f;
+            if (net_receive_all(g_server_sock, &f, sizeof(f)) <= 0) goto io_error;
+            f.reason[sizeof(f.reason) - 1] = '\0';
+            fail(NET_FAILED, f.reason);
+            goto done;
+        }
+        case MSG_STATE: {
+            if (net_receive_all(g_server_sock, &st, sizeof(st)) <= 0) goto io_error;
+            st.username[sizeof(st.username) - 1] = '\0';
+            pthread_mutex_lock(&g_state_mutex);
+            if (st.entity_id == g_my_entity_id) {
+                if (last_floor != -1 && last_floor != st.floor_id) {
+                    clear_floor_locked();
+                    push_simple(CEV_FLOOR_CHANGE, st.floor_id, st.x, st.y);
                 }
-            } else if (hdr.type == MSG_ENTITY_UPDATE) {
-                /*Compact batch: [int32 count][EntityUpdateRec count].
-                 * It only ever carries entities for which the server
-                 * ALREADY sent a full MsgState (per-client "seen" bitmap
-                 * server-side), so this handler updates x/y/hp of known
-                 * ids; an unknown id is ignored by design (the full
-                 * state always arrives first). This replaces the old
-                 * one-MsgState-per-entity-per-step flood (~1.5 KB each).
-                 * count and the total length are sanity-checked BEFORE
-                 * the malloc, exactly like the map chunk.*/
-                int32_t count = 0;
-                if (net_receive_all(g_server_sock, &count, sizeof(count)) > 0 &&
-                    count > 0 && count <= 4096 &&
-                    hdr.length == (int)(sizeof(count) + (size_t)count * sizeof(EntityUpdateRec))) {
-                    EntityUpdateRec *recs = malloc((size_t)count * sizeof(EntityUpdateRec));
-                    if (recs) {
-                        if (net_receive_all(g_server_sock, recs,
-                                            (size_t)count * sizeof(EntityUpdateRec)) > 0) {
-                            pthread_mutex_lock(&g_state_mutex);
-                            for (int k = 0; k < count; k++) {
-                                for (int i = 0; i < CLIENT_MAX_ENTITIES; i++) {
-                                    if (g_entities[i].id == recs[k].entity_id) {
-                                        g_entities[i].x = recs[k].x;
-                                        g_entities[i].y = recs[k].y;
-                                        g_entities[i].hp = recs[k].hp;
-                                        g_entities[i].active = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            pthread_mutex_unlock(&g_state_mutex);
-                        } else {
-                            /*partial batch: the stream is desynced*/
-                            g_running = false;
-                        }
-                        free(recs);
+                last_floor = st.floor_id;
+                handle_own_state(&st);
+            } else if (st.floor_id == g_my_floor) {
+                int free_slot = -1, slot = -1;
+                for (int i = 0; i < CLIENT_MAX_ENTITIES; i++) {
+                    if (g_entities[i].active && g_entities[i].id == st.entity_id) { slot = i; break; }
+                    if (free_slot < 0 && !g_entities[i].active) free_slot = i;
+                }
+                if (st.hp <= 0) {
+                    if (slot >= 0) {
+                        g_entities[slot].active = false;
+                        g_entities[slot].id = 0;
+                        g_entities[slot].floor_id = -1;
                     }
                 } else {
-                    fprintf(stderr, "[NET] Protocol error: bad entity batch (count %d, len %d) — disconnecting.\n",
-                            count, hdr.length);
-                    g_running = false;
-                }
-                if (!g_running) break;
-            } else if (hdr.type == MSG_MAP_CHUNK) {
-                if (net_receive_all(g_server_sock, &msg_chunk, sizeof(MsgMapChunk)) > 0) {
-                    /*Sanity-check the chunk BEFORE malloc: width/height
-                     * come from the server and drive the allocation — an
-                     * invalid (or malicious) value could request a huge
-                     * block or make the receive loop spin.*/
-                    if (msg_chunk.width <= 0 || msg_chunk.height <= 0 ||
-                        msg_chunk.width > 256 || msg_chunk.height > 256 ||
-                        msg_chunk.start_x < 0 || msg_chunk.start_y < 0) {
-                        fprintf(stderr, "[NET] Protocol error: invalid map chunk dimensions — disconnecting.\n");
-                        g_running = false;
-                        break;
-                    }
-                    chunk_size = msg_chunk.width * msg_chunk.height * (int)sizeof(TileType);
-                    if (hdr.length != (int)(sizeof(MsgMapChunk) + chunk_size)) {
-                        fprintf(stderr, "[NET] Protocol error: map chunk length %d != expected %d — disconnecting.\n",
-                                hdr.length, (int)(sizeof(MsgMapChunk) + chunk_size));
-                        g_running = false;
-                        break;
-                    }
-                    chunk_buf = malloc(chunk_size);
-                    if (net_receive_all(g_server_sock, chunk_buf, chunk_size) > 0) {
-                        pthread_mutex_lock(&g_state_mutex);
-                        i = 0;
-                        /*Change detection: the server re-sends the
-                         * player-centered 100x100 window on EVERY step
-                         * (M7). While walking, ~98% of the chunk is
-                         * identical to what g_local_map already holds —
-                         * marking the map dirty unconditionally made the
-                         * renderer rebuild the floor mesh on every step
-                         * (100-130 ms stalls). Dirty ONLY when at least
-                         * one tile actually changed.*/
-                        bool chunk_changed = false;
-                        for (cy = msg_chunk.start_y; cy < msg_chunk.start_y + msg_chunk.height; cy++) {
-                            for (cx = msg_chunk.start_x; cx < msg_chunk.start_x + msg_chunk.width; cx++) {
-                                if (cx >= 0 && cx < MAP_WIDTH && cy >= 0 && cy < MAP_HEIGHT &&
-                                    g_local_map[cy][cx] != chunk_buf[i]) {
-                                    g_local_map[cy][cx] = chunk_buf[i];
-                                    chunk_changed = true;
-                                }
-                                i++;
-                            }
-                        }
-                        if (chunk_changed) g_map_dirty = true;
-                        pthread_mutex_unlock(&g_state_mutex);
-                    }
-                    free(chunk_buf);
-                }
-            } else if (hdr.type == MSG_SPELL_VFX) {
-                MsgSpellVFX msg_vfx;
-                if (net_receive_all(g_server_sock, &msg_vfx, sizeof(MsgSpellVFX)) > 0) {
-                    spawn_vfx(msg_vfx.vfx_type, (float)msg_vfx.start_x, (float)msg_vfx.start_y, (float)msg_vfx.target_x, (float)msg_vfx.target_y, msg_vfx.color_r, msg_vfx.color_g, msg_vfx.color_b);
-                }
-            } else if (hdr.type == MSG_TEXT) {
-                if (net_receive_all(g_server_sock, &msg_txt, sizeof(MsgText)) > 0) {
-                    client_log_add(msg_txt.text);
-                    fct_parse_log(msg_txt.text);
-                    printf("\r\033[K%s\n> ", msg_txt.text); fflush(stdout);
-                }
-            } else if (hdr.type == MSG_TIME_SYNC) {
-                MsgTimeSync ts;
-                if (net_receive_all(g_server_sock, &ts, sizeof(MsgTimeSync)) > 0) {
-                    pthread_mutex_lock(&g_state_mutex);
-                    g_game_h = ts.game_hour;
-                    g_game_m = ts.game_min;
-                    g_total_turns = ts.total_turns;
-                    pthread_mutex_unlock(&g_state_mutex);
-                }
-            } else if (hdr.type == MSG_TOMBSTONE_REMOVE) {
-                MsgTombstoneRemove rm_msg;
-                if (net_receive_all(g_server_sock, &rm_msg, sizeof(MsgTombstoneRemove)) > 0) {
-                    pthread_mutex_lock(&g_state_mutex);
-                    for (int i = 0; i < CLIENT_MAX_ENTITIES; i++) {
-                        if (g_entities[i].active &&
-                            g_entities[i].id == rm_msg.entity_id &&
-                            g_entities[i].is_tombstone) {
-                            g_entities[i].active      = false;
-                            g_entities[i].is_tombstone = false;
-                            break;
-                        }
-                    }
-                    pthread_mutex_unlock(&g_state_mutex);
+                    if (slot < 0) slot = free_slot;
+                    if (slot >= 0) entity_from_state(&g_entities[slot], &st);
                 }
             }
-        } else if (bytes == 0) {
-            printf("\n[NET] Server disconnected.\n");
-            g_running = false;
-        } else {
-            usleep(10000);
+            pthread_mutex_unlock(&g_state_mutex);
+            break;
         }
+        case MSG_ENTITY_UPDATE: {
+            int32_t count = 0;
+            if (net_receive_all(g_server_sock, &count, sizeof(count)) <= 0) goto io_error;
+            if (count <= 0 || count > 4096 ||
+                hdr.length != (int)(sizeof(count) + (size_t)count * sizeof(EntityUpdateRec))) {
+                fail(NET_FAILED, "Protocol error (bad entity batch).");
+                goto done;
+            }
+            EntityUpdateRec *recs = malloc((size_t)count * sizeof(EntityUpdateRec));
+            if (!recs) goto io_error;
+            if (net_receive_all(g_server_sock, recs, (int)((size_t)count * sizeof(EntityUpdateRec))) <= 0) {
+                free(recs);
+                goto io_error;
+            }
+            pthread_mutex_lock(&g_state_mutex);
+            for (int k = 0; k < count; k++)
+                for (int i = 0; i < CLIENT_MAX_ENTITIES; i++)
+                    if (g_entities[i].active && g_entities[i].id == recs[k].entity_id) {
+                        g_entities[i].x = recs[k].x;
+                        g_entities[i].y = recs[k].y;
+                        g_entities[i].hp = recs[k].hp;
+                        if (recs[k].hp > g_entities[i].max_hp) g_entities[i].max_hp = recs[k].hp;
+                        if (recs[k].hp <= 0 && !g_entities[i].is_tombstone && !g_entities[i].killed_at_ms)
+                            g_entities[i].killed_at_ms = plat_time_ms();
+                        break;
+                    }
+            pthread_mutex_unlock(&g_state_mutex);
+            free(recs);
+            break;
+        }
+        case MSG_MAP_CHUNK: {
+            MsgMapChunk ch;
+            if (net_receive_all(g_server_sock, &ch, sizeof(ch)) <= 0) goto io_error;
+            if (ch.width <= 0 || ch.height <= 0 || ch.width > 256 || ch.height > 256 ||
+                ch.start_x < 0 || ch.start_y < 0) {
+                fail(NET_FAILED, "Protocol error (invalid map chunk).");
+                goto done;
+            }
+            int sz = ch.width * ch.height * (int)sizeof(TileType);
+            if (hdr.length != (int)(sizeof(MsgMapChunk) + (size_t)sz)) {
+                fail(NET_FAILED, "Protocol error (map chunk length).");
+                goto done;
+            }
+            TileType *buf = malloc((size_t)sz);
+            if (!buf) goto io_error;
+            if (net_receive_all(g_server_sock, buf, sz) <= 0) {
+                free(buf);
+                goto io_error;
+            }
+            pthread_mutex_lock(&g_state_mutex);
+            bool changed = false;
+            int i = 0;
+            for (int cy = ch.start_y; cy < ch.start_y + ch.height; cy++)
+                for (int cx = ch.start_x; cx < ch.start_x + ch.width; cx++, i++)
+                    if (cx < MAP_WIDTH && cy < MAP_HEIGHT && g_local_map[cy][cx] != buf[i]) {
+                        g_local_map[cy][cx] = buf[i];
+                        changed = true;
+                    }
+            if (changed) {
+                atomic_fetch_add(&g_map_version, 1);
+                g_map_dirty = true;
+            }
+            pthread_mutex_unlock(&g_state_mutex);
+            free(buf);
+            break;
+        }
+        case MSG_SPELL_VFX: {
+            ClientEvent e;
+            memset(&e, 0, sizeof(e));
+            if (net_receive_all(g_server_sock, &e.vfx, sizeof(e.vfx)) <= 0) goto io_error;
+            e.kind = CEV_VFX;
+            e.x = e.vfx.target_x;
+            e.y = e.vfx.target_y;
+            pthread_mutex_lock(&g_state_mutex);
+            evq_push(&e);
+            pthread_mutex_unlock(&g_state_mutex);
+            break;
+        }
+        case MSG_TEXT: {
+            MsgText t;
+            if (net_receive_all(g_server_sock, &t, sizeof(t)) <= 0) goto io_error;
+            t.text[sizeof(t.text) - 1] = '\0';
+            client_log_add(t.text);
+            pthread_mutex_lock(&g_state_mutex);
+            push_simple(CEV_TEXT, (int)(g_log_total - 1), g_my_x, g_my_y);
+            pthread_mutex_unlock(&g_state_mutex);
+            break;
+        }
+        case MSG_TIME_SYNC: {
+            MsgTimeSync ts;
+            if (net_receive_all(g_server_sock, &ts, sizeof(ts)) <= 0) goto io_error;
+            pthread_mutex_lock(&g_state_mutex);
+            g_game_h = ts.game_hour;
+            g_game_m = ts.game_min;
+            g_total_turns = ts.total_turns;
+            pthread_mutex_unlock(&g_state_mutex);
+            break;
+        }
+        case MSG_TOMBSTONE_REMOVE: {
+            MsgTombstoneRemove rm;
+            if (net_receive_all(g_server_sock, &rm, sizeof(rm)) <= 0) goto io_error;
+            pthread_mutex_lock(&g_state_mutex);
+            for (int i = 0; i < CLIENT_MAX_ENTITIES; i++)
+                if (g_entities[i].active && g_entities[i].id == rm.entity_id && g_entities[i].is_tombstone) {
+                    g_entities[i].active = false;
+                    g_entities[i].is_tombstone = false;
+                    break;
+                }
+            pthread_mutex_unlock(&g_state_mutex);
+            break;
+        }
+        case MSG_INVENTORY: {
+            if (net_receive_all(g_server_sock, &inv, sizeof(inv)) <= 0) goto io_error;
+            if (inv.count < 0) inv.count = 0;
+            if (inv.count > INV_MAX_ITEMS) inv.count = INV_MAX_ITEMS;
+            for (int i = 0; i < inv.count; i++) inv.items[i].name[sizeof(inv.items[i].name) - 1] = '\0';
+            pthread_mutex_lock(&g_state_mutex);
+            g_inventory = inv;
+            g_inventory_version++;
+            push_simple(CEV_INV_CHANGED, inv.count, g_my_x, g_my_y);
+            pthread_mutex_unlock(&g_state_mutex);
+            break;
+        }
+        case MSG_SPELLBOOK: {
+            if (net_receive_all(g_server_sock, &book, sizeof(book)) <= 0) goto io_error;
+            if (book.count < 0) book.count = 0;
+            if (book.count > BOOK_MAX_SPELLS) book.count = BOOK_MAX_SPELLS;
+            for (int i = 0; i < book.count; i++) book.spells[i].name[sizeof(book.spells[i].name) - 1] = '\0';
+            pthread_mutex_lock(&g_state_mutex);
+            g_spellbook = book;
+            g_spellbook_version++;
+            pthread_mutex_unlock(&g_state_mutex);
+            break;
+        }
+        case MSG_SHOP: {
+            if (net_receive_all(g_server_sock, &shop, sizeof(shop)) <= 0) goto io_error;
+            if (shop.count < 0) shop.count = 0;
+            if (shop.count > SHOP_MAX_ITEMS) shop.count = SHOP_MAX_ITEMS;
+            shop.shop_name[sizeof(shop.shop_name) - 1] = '\0';
+            for (int i = 0; i < shop.count; i++) {
+                shop.items[i].name[sizeof(shop.items[i].name) - 1] = '\0';
+                shop.items[i].type[sizeof(shop.items[i].type) - 1] = '\0';
+                shop.items[i].stats[sizeof(shop.items[i].stats) - 1] = '\0';
+            }
+            pthread_mutex_lock(&g_state_mutex);
+            bool was_open = g_shop.merchant_id != 0;
+            g_shop = shop;
+            g_shop_version++;
+            if (shop.merchant_id != 0 && !was_open) push_simple(CEV_SHOP_OPEN, shop.merchant_id, g_my_x, g_my_y);
+            if (shop.merchant_id == 0 && was_open) push_simple(CEV_SHOP_CLOSE, 0, g_my_x, g_my_y);
+            pthread_mutex_unlock(&g_state_mutex);
+            break;
+        }
+        case MSG_GAME_EVENT: {
+            ClientEvent e;
+            memset(&e, 0, sizeof(e));
+            if (net_receive_all(g_server_sock, &e.ev, sizeof(e.ev)) <= 0) goto io_error;
+            e.kind = CEV_SERVER;
+            e.x = e.ev.x;
+            e.y = e.ev.y;
+            e.value = e.ev.value;
+            pthread_mutex_lock(&g_state_mutex);
+            if (e.ev.type == GEV_KILL)
+                for (int i = 0; i < CLIENT_MAX_ENTITIES; i++)
+                    if (g_entities[i].active && g_entities[i].id == e.ev.dst_id && g_entities[i].id != g_my_entity_id) {
+                        g_entities[i].hp = 0;
+                        if (!g_entities[i].killed_at_ms) g_entities[i].killed_at_ms = plat_time_ms();
+                        break;
+                    }
+            evq_push(&e);
+            pthread_mutex_unlock(&g_state_mutex);
+            break;
+        }
+        default:
+            break;
+        }
+        continue;
+    io_error:
+        fail(NET_DISCONNECTED, "Connection lost.");
+        break;
     }
+done:
     return NULL;
 }

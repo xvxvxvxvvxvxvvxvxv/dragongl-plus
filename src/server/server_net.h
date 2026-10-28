@@ -30,6 +30,7 @@ void send_map_chunk(int sock, Map *map, int cx, int cy, int size);
 void send_detailed_state(Client *c);
 void broadcast_spell_vfx(int sx, int sy, int tx, int ty, int vfx_type, float r, float g, float b, int floor_id);
 void broadcast_nearby_entities(Client *c, NPC *npcs);
+void client_seen_forget_npc(int npc_i);
 void notify_player_left_floor(Client *c, int old_floor);
 void broadcast_player_state(Client *c);
 

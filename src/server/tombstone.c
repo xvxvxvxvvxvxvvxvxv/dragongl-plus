@@ -325,14 +325,14 @@ void tombstone_list(Client *c) {
         strftime(timestr, sizeof(timestr), "%d/%m/%Y %H:%M", tm_info);
 
         send_text_to_client(c->sock,
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            "------------------------------------------------");
         send_text_to_client(c->sock,
-            "⚰  TOMBSTONE — %s", t->owner);
+            " TOMBSTONE — %s", t->owner);
         send_text_to_client(c->sock,
             "Floor %d | Position (%d,%d) | Died on: %s",
             t->floor_id, t->x, t->y, timestr);
         send_text_to_client(c->sock,
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            "------------------------------------------------");
 
         if (t->gold > 0) {
             send_text_to_client(c->sock, "[GOLD] %lu gp", (unsigned long)t->gold);
@@ -401,7 +401,7 @@ void tombstone_list(Client *c) {
         }
 
         send_text_to_client(c->sock,
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            "------------------------------------------------");
         if (strcmp(c->username, t->owner) == 0) {
             send_text_to_client(c->sock,
                 "Type 'pickup' to recover your items.");

@@ -29,6 +29,7 @@
  * Each type has unique narrative text for textual immersion.
  */
 
+#include "server_ui_sync.h"
 #include "aoe.h"
 #include <stdio.h>
 #include <string.h>
@@ -94,6 +95,8 @@ void aoe_apply_damage_to_npc(
     }
 
     npc->hp -= dmg;
+    ui_broadcast_event(npc->floor_id, GEV_HURT, caster->entity_id,
+                       npc->entity_id, dmg, npc->x, npc->y);
 
     send_text_to_client(caster->sock,
         "  > %s: %d %s damage%s (HP: %d/%d)",
@@ -105,6 +108,8 @@ void aoe_apply_damage_to_npc(
         npc->max_hp);
 
     if (npc->hp <= 0) {
+        ui_broadcast_event(npc->floor_id, GEV_KILL, caster->entity_id,
+                           npc->entity_id, 0, npc->x, npc->y);
         npc_set_active(npc, false);
         npc->respawn_timer = 120; //RESPAWN_TICKS
         int xp_gained    = npc->template ? npc->template->xp : 10;

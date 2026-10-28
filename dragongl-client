@@ -1,84 +1,39 @@
-#!/bin/bash
-# DRAGON GL
+#!/bin/sh
+# DRAGON GL - client launcher
 # Dragon GL - Copyright (C) 2026 Nicola Taibi
 # License: GPL-3.0-or-later
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# Professional Startup Script
+#
+# Usage: dragongl-client [gl|vk] [server_ip] [port] [--fullscreen|--windowed]
+# Every argument is optional and passed to dragongl_client unchanged
+# (with no argument the game opens on its title menu).
 
-# DragonGL Client Launcher
-cat << "EOF"
-###############################################################################
-#                                                                             #
-#                      Dragon GL - Arcane Game Engine                         #
-#                              CLIENT MODULE                                  #
-#                                                                             #
-###############################################################################
-EOF
+case "$1" in
+-h|--help)
+    cat <<'TXT'
+Usage: dragongl-client [gl|vk] [server_ip] [port] [--fullscreen|--windowed]
 
-show_help() {
-    echo -e "\nUsage: $0 [opzioni] <backend> [server_ip] [port]"
-    echo "Options:"
-    echo "  -h, --help    Shows this help message"
-    echo -e "\nBackend:"
-    echo "  gl            Start with OpenGL backend (Legacy)"
-    echo "  vk            Start with Vulkan backend (Modern)"
-    echo -e "\nConnection (optional, skips the interactive prompt):"
-    echo "  server_ip     IP/hostname of the game server (default 127.0.0.1)"
-    echo "  port          TCP port of the game server (default 8080)"
-    echo -e "\nExample:"
-    echo "  $0 gl 192.168.1.10 9000"
-}
+  gl            OpenGL 3.3 renderer (default)
+  vk            Vulkan 1.3 renderer (falls back to OpenGL if unavailable)
+  server_ip     pre-fill the "Join a Server" form
+  port          TCP port of the server (default 8080)
 
-# Check if executable exists
-BIN="./build/dragongl_client"
-if [ ! -f "$BIN" ]; then
-    echo -e "\n[ERROR] Client executable not found in build/."
-    echo "Compile the project with:"
-    echo "  cd build && cmake .. && make -j\$(nproc)"
-    exit 1
-fi
+Example:  dragongl-client vk 192.168.1.10 9000
+TXT
+    exit 0
+    ;;
+esac
 
-# Parsing parametri
-BACKEND=""
-SERVER_IP=""
-PORT=""
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -h|--help)
-            show_help
-            exit 0
-            ;;
-        gl|vk)
-            BACKEND="$1"
-            shift
-            ;;
-        *)
-            # First non-backend positional = server IP, second = port
-            if [ -z "$SERVER_IP" ]; then
-                SERVER_IP="$1"
-            elif [ -z "$PORT" ]; then
-                PORT="$1"
-            else
-                echo "Unknown option: $1"
-                show_help
-                exit 1
-            fi
-            shift
-            ;;
-    esac
+HERE=$(cd "$(dirname "$0")" && pwd)
+for BIN in "$HERE/build/dragongl_client" "$HERE/dragongl_client"; do
+    [ -x "$BIN" ] && exec "$BIN" "$@"
 done
-
-if [ -z "$BACKEND" ]; then
-    show_help
-    exit 1
+if command -v dragongl_client >/dev/null 2>&1; then
+    exec dragongl_client "$@"
 fi
-
-# Start the client from root (data/ e saves/ sono relativi a questa directory)
-cd "$(dirname "$0")"
-
-# Quoted expansion: no word-splitting even if the IP contained spaces (it
-# shouldn't, but the launcher must not misbehave).
-exec "$BIN" "$BACKEND" "$SERVER_IP" "$PORT"
+echo "[ERROR] dragongl_client not found. Build it first:" >&2
+echo "  cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j" >&2
+exit 1

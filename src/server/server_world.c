@@ -32,6 +32,7 @@
  *   - Persistent AoE cloud updates
  */
 
+#include "server_ui_sync.h"
 #include "server_world.h"
 #include "server_internal.h"
 #include "ai.h"
@@ -124,6 +125,7 @@ void npc_set_active(NPC *n, bool active) {
         return;
     }
     n->active = active;
+    if (!active && n >= g_npcs && n < g_npcs + MAX_NPCS) client_seen_forget_npc((int)(n - g_npcs));
     if (n->archetype == ARCH_MERCHANT) {
         return; /*excluded from the cache, like in floor_stats_rebuild*/
     }
@@ -227,6 +229,8 @@ void player_respawn_town(Client *c) {
   if (!c || !master_world)
     return;
   int old_floor = c->floor_id;
+  /*Tell the graphical client BEFORE the teleport (death screen).*/
+  ui_send_event(c, GEV_PLAYER_DIED, 0, c->entity_id, old_floor, c->x, c->y);
   if (old_floor >= 0 && old_floor < MAX_FLOORS &&
       c->x >= 0 && c->x < MAP_WIDTH && c->y >= 0 && c->y < MAP_HEIGHT &&
       master_world->floors[old_floor].entity_grid[c->y][c->x] == c->entity_id) {
@@ -293,8 +297,8 @@ void update_world(Client *clients, NPC *npcs) {
     /* --- Phase 3: Save Full State (Persistent Voxels and NPCs) --- */
     if (master_world) {
       char world_path[DATA_DIR_MAX + 32], npcs_path[DATA_DIR_MAX + 32];
-      snprintf(world_path, sizeof(world_path), "%s/world.dat", g_data_dir);
-      snprintf(npcs_path, sizeof(npcs_path), "%s/npcs.dat", g_data_dir);
+      snprintf(world_path, sizeof(world_path), "%s/world.dat", g_state_dir);
+      snprintf(npcs_path, sizeof(npcs_path), "%s/npcs.dat", g_state_dir);
       world_save(master_world, world_path);
       /*Atomic write (see atomic_write_begin): a crash mid-autosave must
        * not leave a truncated npcs.dat that the next boot would treat
@@ -873,6 +877,18 @@ void update_world(Client *clients, NPC *npcs) {
   /*'round_active': 'new_round' is cleared by the first AI cycle above.*/
   if (round_active) {
     aoe_update_clouds(npcs, MAX_NPCS, clients, MAX_CLIENTS);
+  }
+
+  /*-------------------------------------------------------
+   * 4. Creature movement for every player, every tick: the entity
+   *    broadcast used to run only when the player himself moved, so
+   *    monsters looked frozen (and then "teleported") around a player
+   *    standing still, fighting or resting. Compact 12-byte records.
+   * -------------------------------------------------------*/
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (clients[i].active && clients[i].authenticated) {
+      broadcast_nearby_entities(&clients[i], npcs);
+    }
   }
 }
 

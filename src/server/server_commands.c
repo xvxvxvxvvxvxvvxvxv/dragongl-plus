@@ -50,12 +50,14 @@
 #include <math.h>
 #include <time.h>
 #include <ctype.h>
+#include <errno.h>
+#ifndef _WIN32
 #include <sys/wait.h>
 #include <spawn.h>
-#include <errno.h>
 #include <unistd.h>
 /*POSIX: the process environment passed to posix_spawn*/
 extern char **environ;
+#endif
 
 /*Compact structure for temple table*/
 typedef struct { int cls; int x0,x1,y0,y1; const char *name; const char *ritual; } TempleInfo;
@@ -131,29 +133,29 @@ static const char *get_voxel_name_it(VoxelType vt) {
 
 static void evaluate_digging_potential(int nx, int ny, int f, VoxelType vt, char *buf, size_t buf_size) {
   if (vt == VOXEL_GOLD_VEIN) {
-    snprintf(buf, buf_size, "⚡ VERY RICH: Pure Gold Vein! Highly recommended dig!");
+    snprintf(buf, buf_size, "VERY RICH: Pure Gold Vein! Highly recommended dig!");
   } else if (vt >= VOXEL_CRYSTAL_BLUE && vt <= VOXEL_CRYSTAL_WHITE) {
-    snprintf(buf, buf_size, "✨ PRECIOUS: Raw magic crystal! Extraction recommended!");
+    snprintf(buf, buf_size, "PRECIOUS: Raw magic crystal! Extraction recommended!");
   } else if (vt == VOXEL_WALL || vt == VOXEL_ROCK) {
     unsigned int hash = (unsigned int)(nx * 73 + ny * 37 + f * 19 + 17);
     int chance = hash % 100;
     if (chance < 15) {
-      snprintf(buf, buf_size, "💎 VERY PROSPEROUS: Silver and Quartz veins detected in the wall!");
+      snprintf(buf, buf_size, "VERY PROSPEROUS: Silver and Quartz veins detected in the wall!");
     } else if (chance < 35) {
-      snprintf(buf, buf_size, "🪙 PROSPEROUS: Traces of metallic minerals and pyrite.");
+      snprintf(buf, buf_size, "PROSPEROUS: Traces of metallic minerals and pyrite.");
     } else {
-      snprintf(buf, buf_size, "🪨 STERILE: Ordinary hard rock. Risk of blunting the tool.");
+      snprintf(buf, buf_size, "STERILE: Ordinary hard rock. Risk of blunting the tool.");
     }
   } else if (vt == VOXEL_MUD || vt == VOXEL_SAND || vt == VOXEL_ASH || vt == VOXEL_GRASS) {
     unsigned int hash = (unsigned int)(nx * 31 + ny * 47 + f * 13 + 5);
     int chance = hash % 100;
     if (chance < 20) {
-      snprintf(buf, buf_size, "🏺 PROSPEROUS: Sediment rich in raw nuggets or finds!");
+      snprintf(buf, buf_size, "PROSPEROUS: Sediment rich in raw nuggets or finds!");
     } else {
-      snprintf(buf, buf_size, "🌱 SOIL: Soft soil, easy but poor excavation.");
+      snprintf(buf, buf_size, "SOIL: Soft soil, easy but poor excavation.");
     }
   } else {
-    snprintf(buf, buf_size, "➖ REGULAR: Non-mining surface.");
+    snprintf(buf, buf_size, "- REGULAR: Non-mining surface.");
   }
 }
 
@@ -262,6 +264,7 @@ static int dump_floor_v2(const char *path, int floor_id, const Client *c) {
   return 0;
 }
 
+#ifndef _WIN32
 /* Resolves "python3" to an ABSOLUTE path for posix_spawn.
  *
  * glibc's posix_spawn() does NOT search PATH when the file contains no
@@ -402,6 +405,16 @@ static void run_pdf_map_generator(int sock, const char *dump, const char *pdf, i
     send_text_to_client(sock, "[DM] Generated PDF Map: %s (Floor %d)", pdf, floor_id);
   }
 }
+#else
+/*Windows build: the PDF generator is a Python script run on the server
+ * host; the portable Windows package does not ship an interpreter, so
+ * the DM gets the dump file and the exact command to run by hand.*/
+static void run_pdf_map_generator(int sock, const char *dump, const char *pdf, int floor_id) {
+  send_text_to_client(sock,
+    "[DM] Map dump written to %s. Generate the PDF with: "
+    "python tools\\generate_pdf_map.py %s %s %d", dump, dump, pdf, floor_id);
+}
+#endif
 
 void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   if (!c || !cmd) {
@@ -1347,11 +1360,11 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         boss_count++;
         const char *bname = (npcs[i].template) ? npcs[i].template->name : "Unknown Boss";
         send_text_to_client(c->sock,
-          "[DM] ╔═══════════════════════ ═══════════════════════╗");
+          "[DM] +======================= =======================+");
         send_text_to_client(c->sock,
           "[DM] BOSS #%d — %s (NPC id %d)", boss_count, bname, npcs[i].entity_id);
         send_text_to_client(c->sock,
-          "[DM] ╚═══════════════════════ ═══════════════════════╝");
+          "[DM] +======================= =======================+");
         /* Posizione */
         send_text_to_client(c->sock,
           "[DM] Position: Floor %d X:%d Y:%d",
@@ -1437,7 +1450,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
               npcs[i].effects[ei].duration_rounds);
           }
         }
-        send_text_to_client(c->sock, "[DM] ──────────────────────── ────────────────────────");
+        send_text_to_client(c->sock, "[DM] ------------------------ ------------------------");
       }
       
       int dead_count = 0;
@@ -1505,11 +1518,11 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         if (npcs[i].archetype != ARCH_MERCHANT) continue;
         merch_count++;
         send_text_to_client(c->sock,
-          "[DM] ╔═══════════════════════ ═══════════════════════╗");
+          "[DM] +======================= =======================+");
         send_text_to_client(c->sock,
           "[DM] WANDING MERCHANT #%d (NPC id %d)", merch_count, npcs[i].entity_id);
         send_text_to_client(c->sock,
-          "[DM] ╚═══════════════════════ ═══════════════════════╝");
+          "[DM] +======================= =======================+");
         /* Position */
         send_text_to_client(c->sock,
           "[DM] Position: Floor %d X:%d Y:%d",
@@ -1535,7 +1548,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         } else {
           send_text_to_client(c->sock, "[DM] Goods for sale: empty");
         }
-        send_text_to_client(c->sock, "[DM] ──────────────────────── ────────────────────────");
+        send_text_to_client(c->sock, "[DM] ------------------------ ------------------------");
       }
       if (merch_count == 0) {
         send_text_to_client(c->sock,
@@ -1563,8 +1576,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
               npcs[i].spawn_y = ty;
               npcs[i].template_idx = tid;
               npcs[i].template = &bestiary_data[tid];
-              npcs[i].hp = npcs[i].max_hp = npcs[i].template->hp_avg;
-              ai_attach_behavior(&npcs[i]);
+              /*full initialisation (AC, XP, damage, archetype, HP) exactly
+               * like a natural spawn - not just the behaviour tree*/
+              ai_init_npc(&npcs[i], npcs[i].template->name, c->floor_id);
               master_world->floors[c->floor_id].entity_grid[ty][tx] = npcs[i].entity_id;
               /*Activate only once the template is assigned: npc_set_active
                *must see the final fields to update the floor cache (A2).*/
@@ -1605,8 +1619,13 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
             notify_player_left_floor(c, old_floor);
           send_text_to_client(c->sock, "[DM] Teleported to Floor %d (%d,%d)", f,
                               tx, ty);
-          // Force map refresh
-          send_map_chunk(c->sock, &master_world->floors[f].map, tx, ty, 15);
+          /*Same sequence as the stairs: the new state first (so the client
+           * notices the floor change and drops the old map), then the map
+           * around the arrival point and the creatures there.*/
+          broadcast_player_state(c);
+          send_detailed_state(c);
+          send_map_chunk(c->sock, &master_world->floors[f].map, tx, ty, INITIAL_VIEW_RADIUS);
+          broadcast_nearby_entities(c, npcs);
           return;
         }
         send_text_to_client(c->sock,
@@ -1825,7 +1844,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
           g_tombstones[i].floor_id == f &&
           abs(g_tombstones[i].x - px) + abs(g_tombstones[i].y - py) <= 1) {
         char tbuf[96];
-        snprintf(tbuf, sizeof(tbuf), "| [⚰ Tombstone of %s — type 'list' to inspect]",
+        snprintf(tbuf, sizeof(tbuf), "| [Tombstone of %s — type 'list' to inspect]",
                  g_tombstones[i].owner);
         strncat(feet_buf, tbuf, sizeof(feet_buf) - strlen(feet_buf) - 1);
       }
@@ -2133,8 +2152,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     float w = get_current_weight(c);
     send_text_to_client(
         c->sock,
-        "================ INVENTORY (%.1f/%.1f kg) ================", w,
-        (float)(c->str * 5));
+        "================ INVENTORY (%.1f/%.1f lb) ================", w,
+        (float)(c->str * 15));
 
     ItemInstance *sl[] = {&c->slot_head,  &c->slot_neck,   &c->slot_body,
                           &c->slot_back,  &c->slot_hand_r, &c->slot_hand_l,
@@ -3309,6 +3328,17 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
                           strncmp(cmd, "sneak", 5) == 0 ||
                           strncmp(cmd, "meditate", 8) == 0);
 
+    //0. Quick-belt slot ("use belt 2"): the graphical client's quick bar
+    //   (keys 1-4) addresses belt slots directly, which used to be
+    //   possible only by item name.
+    if (strncmp(input, "belt ", 5) == 0 && isdigit((unsigned char)input[5])) {
+      int bi = atoi(input + 5) - 1;
+      if (bi >= 0 && bi < MAX_BELT && c->belt[bi].template_idx != -1 &&
+          c->belt[bi].stack_count > 0) {
+        found_idx = bi;
+        in_belt = true;
+      }
+    } else
     //1. Search the backpack by index
     if (isdigit(input[0])) {
       int requested_idx = atoi(input) - 1;
@@ -4128,6 +4158,17 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     int found_idx = -1;
     bool in_belt = false;
 
+    //0. Quick-belt slot ("use belt 2"): the graphical client's quick bar
+    //   (keys 1-4) addresses belt slots directly, which used to be
+    //   possible only by item name.
+    if (strncmp(input, "belt ", 5) == 0 && isdigit((unsigned char)input[5])) {
+      int bi = atoi(input + 5) - 1;
+      if (bi >= 0 && bi < MAX_BELT && c->belt[bi].template_idx != -1 &&
+          c->belt[bi].stack_count > 0) {
+        found_idx = bi;
+        in_belt = true;
+      }
+    } else
     //1. Search the backpack by index
     if (isdigit(input[0])) {
       int requested_idx = atoi(input) - 1;

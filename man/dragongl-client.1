@@ -1,35 +1,30 @@
-.TH DRAGONGL-CLIENT 1 "2026-09-06" "DragonGL 2026.09.04.02" "User Commands"
+.TH DRAGONGL-CLIENT 1 "2026-10-27" "DragonGL+ 2026.10" "User Commands"
 .SH NAME
 dragongl-client \- Dragon GL client launcher script
 .SH SYNOPSIS
 .B dragongl-client
 .RI "[\-\-help\ |\ -h ]"
-.I backend
+.RI "[ gl | vk ]"
 .RI "[ server_ip ]"
 .RI "[ port ]"
 .SH DESCRIPTION
 .B dragongl-client
-is a convenience launcher for the Dragon GL 3D client. It executes
+is a convenience launcher for the Dragon GL client. It runs
 .B build/dragongl_client
-from the project root directory with the selected rendering backend, so that
-the relative
-.I data/
-and
-.I saves/
-directories are resolved correctly.
-
-The backend argument is mandatory: if it is missing, the script prints an
-error and exits.
+when started from a source tree, otherwise the installed
+.BR dragongl_client ,
+passing every argument unchanged. With no argument the game opens on its
+title menu (Play Solo / Join a Server).
 .SH ARGUMENTS
 .TP
 .B gl
-Start the client with the OpenGL backend (legacy).
+OpenGL 3.3 renderer (default).
 .TP
 .B vk
-Start the client with the Vulkan backend (modern).
+Vulkan 1.3 renderer (falls back to OpenGL if unavailable).
 .TP
 .I server_ip
-(optional) Server IP/hostname; skips the interactive prompt (handy over SSH).
+(optional) Pre-fill the "Join a Server" form.
 .TP
 .I port
 (optional) Server TCP port (default 8080).

@@ -85,6 +85,7 @@ extern int next_id;
  * argument > local ./data > /usr/share/dragongl/data (RPM install).*/
 #define DATA_DIR_MAX 256
 extern char g_data_dir[DATA_DIR_MAX];
+extern char g_state_dir[DATA_DIR_MAX]; /*writable world state*/
 
 // World Events
 extern int active_event_type;
@@ -135,6 +136,7 @@ void check_traps(Client *c, NPC *npcs);
 * Call it every time a client's floor_id changes.*/
 void client_track_explored_floor(Client *c);
 void broadcast_nearby_entities(Client *c, NPC *npcs);
+void client_seen_forget_npc(int npc_i);
 /* Tell all clients on old_floor that c left it (hp<=0 removal message).
 * Call it whenever a player's floor_id changes (stairs, teleport, ...).*/
 void notify_player_left_floor(Client *c, int old_floor);

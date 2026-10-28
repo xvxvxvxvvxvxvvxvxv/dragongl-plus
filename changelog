@@ -1,3 +1,34 @@
+* Tue Oct 27 2026 DragonGL+ - 2026.10.27.01
+- NEW CLIENT: complete rewrite of the graphical client. Renderer-independent
+  frame description (scene + UI vertex streams, one uniform block) drawn by
+  two small backends with identical shading: OpenGL 3.3 core (all entry
+  points loaded at run time, no libGL/GLU link) and Vulkan 1.3 (volk,
+  dynamic rendering, 4x MSAA, 2 frames in flight). Automatic fallback to
+  OpenGL when Vulkan is unavailable.
+- GRAPHICS: procedural texture atlas, voxel-style animated models for heroes
+  and every monster family, ambient occlusion, 32 dynamic lights, animated
+  water/lava/foliage, day/night in the village, fog of war with explored
+  memory, wall cut-away, particles, flashes, floating damage, camera shake.
+- INTERFACE: new title menu over a live dungeon, solo hero list, character
+  creation with 3D preview, join form, settings, how-to-play, credits; HUD
+  with portrait, minimap, objective, hotbar, target frame, name plates,
+  chat with completion/history; inventory, character, spellbook, shop, map
+  and guide windows; embedded fonts (Cinzel, Alegreya Sans - OFL).
+- GAMEPLAY/QOL: click-to-move with A*, auto-attack, camera-relative WASD,
+  map travel (right click / "Go to the stairs"), auto-equipped starting
+  gear, carrying capacity STR x 15 lb, killed creatures removed at once,
+  creatures pushed to every player each tick, respawns visible again.
+- SOLO MODE: "Play Solo" starts a local server (--local, random port and
+  password, --stop-file) with its state in the user profile (-S).
+- PROTOCOL v4: inventory, shop, spellbook and game-event messages, richer
+  entity state (kind, archetype, level, look seed).
+- AUDIO: procedural soundtrack (6 themes with a combat layer) and
+  synthesized sound effects, played through miniaudio.
+- SERVER: command rate limiting, players saved at shutdown, data directory
+  found next to the executable, dm_goto/dm_spawn fixes, English combat log.
+- PLATFORMS: Windows support (platform layer, wepoll), portable Windows
+  (static MinGW) and Linux (glibc 2.27) packages via tools/build_release.sh,
+  GitHub Actions workflow with ASan build, server smoke test and releases.
 * Thu Sep 17 2026 nicolataibi <nicola.taibi.1967@gmail.com> - 2026.09.24.01
 - dragongl.spec updates.
 * Thu Sep 17 2026 nicolataibi <nicola.taibi.1967@gmail.com> - 2026.09.17.02

@@ -39,7 +39,131 @@ Dragon GL is a high-performance, 3D multi-user client-server dungeon exploration
 
 ---
 
-## SCREENSHOTS
+# 🐉 DragonGL+
+
+A complete overhaul of the game client plus many gameplay and quality-of-life
+improvements. **Download, unzip, double-click: nothing to install.**
+
+<table align="center">
+  <tr>
+    <td align="center"><img src="readme_assets/screenshot/plus/title.jpg" alt="Title screen" width="420"/></td>
+    <td align="center"><img src="readme_assets/screenshot/plus/village.jpg" alt="The village" width="420"/></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="readme_assets/screenshot/plus/combat.jpg" alt="Combat" width="420"/></td>
+    <td align="center"><img src="readme_assets/screenshot/plus/inventory.jpg" alt="Inventory" width="420"/></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="readme_assets/screenshot/plus/map.jpg" alt="World map" width="420"/></td>
+    <td align="center"><img src="readme_assets/screenshot/plus/guide.jpg" alt="In-game guide" width="420"/></td>
+  </tr>
+</table>
+
+## ▶️ Download & play
+
+| Platform | Package | How to start |
+|----------|---------|--------------|
+| **Windows 10/11** (x64) | `DragonGL-<version>-windows-x64.zip` | unzip, double-click **`DragonGL.exe`** |
+| **Linux** (x86-64, glibc ≥ 2.27: Ubuntu 18.04+, Debian 10+, Fedora 28+, ...) | `DragonGL-<version>-linux-x86_64.tar.gz` | extract, double-click **`DragonGL`** (or `./DragonGL`) |
+
+The packages are produced by the GitHub Actions workflow (`.github/workflows/ci.yml`:
+artifacts of every build, GitHub Release for every `v*` tag) or locally with
+`tools/build_release.sh`. They are **self-contained**: fonts, shaders, icon and the
+whole soundtrack live inside the executable; on Windows the C runtime is static
+(only system DLLs are used), on Linux only glibc and the graphics driver are needed.
+A graphics driver with **OpenGL 3.3** or **Vulkan 1.3** is enough.
+
+* **Play Solo** — the game starts a private server for you in the background
+  (saves in `%APPDATA%\DragonGL\solo` or `~/.config/dragongl/solo`).
+* **Join a Server** — play with friends: one of you runs
+  `dragongl_server -P 8080 -p <server password>`.
+
+## ✨ What's new
+
+**Graphics**
+- New renderer shared by **OpenGL 3.3** and **Vulkan 1.3** (identical look, pick one in
+  Settings; automatic fallback to OpenGL when Vulkan is missing).
+- Procedural texture atlas (stone, brick, wood, grass, water, lava, crystal, ...),
+  voxel-style animated models for heroes and every family of monsters (humanoids,
+  beasts, insects, undead, spirits, dragons, oozes, giants, ...), ambient occlusion,
+  up to 32 dynamic lights (torches, lava, crystals, glowing mushrooms, spells),
+  animated water/lava, swaying foliage, day/night cycle in the village,
+  fog of war with explored-area memory, walls that fade when they hide the hero.
+- Animations: walking, attacking, getting hit, dying; particles, flashes,
+  screen shake, floating damage numbers, level-up and boss effects.
+
+**Interface**
+- Brand new menus: title screen over a live dungeon, solo hero list, character
+  creation with a 3D preview, join form, settings, how-to-play, credits.
+- HUD: portrait with HP/XP, location banner, minimap, objective tracker,
+  hotbar (potions 1-4, spells 5-0), target frame, name plates, chat with
+  command auto-completion and history, toasts and contextual tips.
+- Windows: inventory with equipment doll and drag-free item actions, character
+  sheet, spellbook, shops, world map, full in-game guide (F1/H).
+
+**Gameplay & quality of life**
+- Mouse control: click to walk (A* pathfinding) / attack / talk / pick up,
+  camera-relative WASD, auto-attack, Tab targeting, Space attacks the nearest foe.
+- **Travel**: right-click an explored spot on the map (or *Go to the stairs*) to walk
+  there automatically; stops when an enemy shows up.
+- Starting gear is equipped automatically; carrying capacity fixed (STR × 15 lb).
+- Monsters are updated every tick (no more frozen/teleporting creatures),
+  killed creatures disappear properly, respawns are visible again.
+- Server: rate limiting of commands, `--local` solo mode, separate state directory,
+  graceful shutdown that saves every player, data folder found next to the executable.
+
+**Audio** — a procedural soundtrack synthesized in real time (no audio files):
+six themes (*The Long Descent*, *Hearth of the Maw*, *Echoes Below*,
+*The Abyssal Choir*, *Guardian of the Seal*, *Lament*) with a combat layer that
+swells when enemies are near, plus synthesized sound effects for everything.
+
+**Builds** — Windows and Linux portable packages, a CMake toolchain for MinGW
+cross-builds, CI with sanitizers and a server smoke test.
+
+## 🎮 Controls
+
+| Input | Action |
+|-------|--------|
+| Left click | walk / attack / talk / pick up |
+| Right drag, Q / E | rotate the camera |
+| Mouse wheel, Home | zoom, reset the camera |
+| WASD / arrows / numpad | move (relative to the camera) |
+| Space / Tab | attack nearest enemy / cycle targets |
+| F / G | interact / pick up |
+| I · C · K · M · H | inventory · character · spells · map · guide |
+| 1-4 / 5-0 | belt potions / spell hotbar |
+| Enter | chat and commands (Tab completes) |
+| R · T · L · N | rest · search · look · show all names |
+| Esc · F12 | menu · screenshot |
+
+## 🔨 Building from source
+
+Everything needed is vendored in `third_party/` (GLFW, volk, Vulkan headers,
+miniaudio, stb, wepoll, fonts): no `-dev` package other than a C compiler,
+CMake and (on Linux) the X11 headers.
+
+```sh
+# Linux (Debian/Ubuntu: sudo apt install build-essential cmake libx11-dev libxrandr-dev \
+#        libxinerama-dev libxcursor-dev libxi-dev)
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+./build/dragongl_client            # or: ./build/dragongl_client vk
+
+# Windows, cross-compiled from Linux with MinGW-w64
+cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake -DDRAGONGL_PORTABLE=ON
+cmake --build build-win -j
+
+# Portable release archives (Linux in an Ubuntu 18.04 container + Windows) into dist/
+tools/build_release.sh
+```
+
+Windows natively: MSYS2 (`mingw-w64-x86_64-gcc`, `cmake`, `ninja`) works with the same
+commands. The Vulkan shaders are recompiled when `glslc` is found, otherwise the
+pre-built SPIR-V in `shaders/spv/` is used.
+
+---
+
+## SCREENSHOTS (original 2026 release)
 
 <table align="center">
   <tr>
@@ -180,25 +304,25 @@ In a legendary world, beneath the ruins of an ancient arcane civilization, lies 
 - **Save Compatibility:** Unspent stat points are seamlessly serialized and restored from the binary `.save` files without breaking compatibility with existing characters.
 
 
-## 🌋 Vulkan GPU-Driven Rendering Architecture
+## 🌋 Rendering Architecture (DragonGL+)
 
-Dragon GL features an advanced, dual-path rendering engine. While the legacy OpenGL backend utilizes a traditional CPU-driven vertex generation approach, the **Vulkan** backend has been completely overhauled to leverage a modern **GPU-Driven Architecture** utilizing Vulkan 1.4 dynamic rendering.
+The client builds every frame as plain data — world mesh (chunked, rebuilt only when
+the map changes), dynamic entities, transparent and additive effects, a 2D interface
+vertex list and one uniform block (camera, fog, up to 32 lights) — and hands it to a
+small backend that only uploads and draws it:
 
-### GPU-Side Culling and Instancing
-Instead of having the CPU iterate over thousands of map tiles and entities to build raw vertices, the engine now pushes lightweight `GpdInstance` and `GpdOriented` structures (containing only position, scale, color, and orientation) to mapped Shader Storage Buffer Objects (SSBOs). 
-A set of highly optimized **Compute Shaders** (`gpd_cull.comp` / `gpd_dyn.comp`) run directly on the GPU to:
-1. Perform frustum culling and distance culling.
-2. Dynamically generate geometry (boxes, pyramids, particles) for visible instances.
-3. Populate the vertex buffer (`gpd_verts`) and atomically increment the draw count (`gpd_draw_cmd`) for a final `vkCmdDrawIndirect` call.
+- **OpenGL 3.3 core** (`src/client/gfx_gl.c`): every entry point is loaded through
+  `glfwGetProcAddress`, so the executable does not link libGL / opengl32 / GLU.
+- **Vulkan 1.3** (`src/client/gfx_vk.c`): volk loads the Vulkan loader at run time,
+  dynamic rendering, 4× MSAA resolved into the swapchain, two frames in flight,
+  device-local world mesh uploaded through staging buffers recorded in the frame,
+  deferred destruction of replaced resources. Shaders: `shaders/*.vert|frag`
+  (GLSL 4.50 mirror of the GL ones), embedded as SPIR-V.
 
-### HUD, Floating Combat Text (FCT), and Player Names
-The 2D UI overlay is decoupled from the 3D scene. The Floating Combat Text (FCT) and Player Names—previously exclusive to the OpenGL backend—have been brought to Vulkan. The engine uses the camera's View-Projection matrix to accurately project 3D world coordinates onto the 2D screen space, appending the text directly into the HUD's vertex buffer. This ensures zero visual desync between the 3D world and the 2D data overlays.
+Both backends share the exact same shading model, so the game looks the same on
+either; the choice is in *Settings → Graphics* or on the command line (`gl` / `vk`).
+`DRAGONGL_VK_VALIDATION=1` enables the Khronos validation layer when installed.
 
-### The `DRAGONGL_GPD` Fallback Variable
-The legacy CPU-vertex path has been meticulously maintained as a functional fallback for systems that might not support advanced compute capabilities or for debugging purposes.
-You can hot-swap the architecture at launch using the `DRAGONGL_GPD` environment variable:
-- **`DRAGONGL_GPD=1`** *(Default)*: Launches the Vulkan client using the modern GPU-driven compute pipeline.
-- **`DRAGONGL_GPD=0`**: Forces the Vulkan client to fallback to the legacy CPU-driven vertex generation.
 ## 🧬 Playable Ancestries (Races)
 
 Dragon GL offers a vast array of 52 playable races, each with unique traits and stat variations.
@@ -1189,22 +1313,18 @@ cd ..
 ```
 The server resolves its data directory in this order: an explicit `--data-dir`, then `./data` (development layout), then `/usr/share/dragongl/data` (RPM install).
 
-### 3. Vulkan Backend & In-Engine HUD
+### 3. Client options
 
-The **Vulkan** (`vk`) backend is an alternative 3D rendering engine that faithfully replicates the visual experience of the OpenGL backend, with the following additional features:
+```bash
+./build/dragongl_client --help                 # all options
+./build/dragongl_client vk --fullscreen        # Vulkan, full screen
+./build/dragongl_client 192.168.1.10 9000      # pre-fill the "Join a Server" form
+```
 
-- **Dynamic lighting** calculated via SPIR-V shaders with per-face normals (diffuse + ambient), identical to the OpenGL engine.
-- **Graphical in-engine HUD**: all textual information is rendered directly over the 3D scene by a dedicated 2D pipeline (no depth test, alpha blending) using a built-in 5x7 bitmap font. No external terminal or additional process is required.
-
-#### What the HUD shows
-
-The overlay is regenerated every frame and includes:
-
-- **Top-left panel**: game time with day/night indicator, current floor, character level, race/class, map position, depth (feet), HP, vitality (hunger state), spell slots, active status conditions, XP and gold, core stats (STR, DEX, CON, INT, WIS, CHA) and combat modifiers (AC, to-hit, damage).
-- **Top-right corner**: real-time minimap with the player marker.
-- **Right panel**: equipped items per slot (head, neck, body, back, arms, gloves, hands, feet, rings, belt).
-- **Bottom-right corner**: boss trophies grid — one cell per floor boss (F10–F100), lit when defeated.
-- **AR compass**: N/S/E/W cardinal markers projected from 3D space onto the screen, so they always point in the correct direction relative to the camera.
+Settings (graphics, audio volumes, controls, interface scale) are stored in
+`settings.ini` under `~/.config/dragongl` (Linux) or `%APPDATA%\DragonGL` (Windows).
+The interface, HUD and renderers are described in the
+[DragonGL+](#-dragongl) section above.
 
 ---
 
@@ -4279,9 +4399,8 @@ The system automatically assigns RGB color based on the school of magic or damag
 
 Dragon GL's particle engine guarantees **full visual parity** between both graphic backends, Vulkan and OpenGL.
 
-- **OpenGL (`render_gl.c`):** Each particle is a dynamic vertex injected into the scene's 3D vertex buffer via `gl_spawn_vfx()`. Color, velocity, and lifetime are defined at runtime and calculated with delta-time for framerate-independent animations.
-- **Vulkan (`render_vk.c`):** The function `vk_spawn_vfx()` implements the same interface, inserting particles into the staging buffer via `push_box`. Rendering is likewise tethered to delta-time and the high-performance Vulkan graphics pipeline.
-- **Backend Detection:** The global flag `g_backend` (set via `argv[1]` at startup) routes the VFX dispatcher to the correct function with zero runtime overhead.
+- **One effect system (`src/client/fx.c`, DragonGL+):** particles, sparks, rings, flashes of light and floating texts are simulated once, with delta-time, and emitted as ordinary scene vertices (alpha-blended or additive passes).
+- **Both backends draw the same data:** OpenGL and Vulkan receive identical vertex streams and shade them with the same shader code, so parity is structural rather than maintained by hand.
 - **Network Trigger:** Effects are always distributed via `MSG_SPELL_VFX`. The server has no knowledge of which renderer the client uses — the choice is entirely transparent and client-driven.
 
 | Feature | OpenGL | Vulkan |

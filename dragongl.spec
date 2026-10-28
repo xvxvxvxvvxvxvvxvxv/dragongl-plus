@@ -4,7 +4,7 @@
 %global toolchain clang
 
 Name:           dragongl
-Version:        2026.09.24.01
+Version:        2026.10.27.01
 Release:        %autorelease
 Summary:        Multi-User Client-Server 3D RPG Engine — OpenGL (GLFW) & Vulkan
 
@@ -15,11 +15,13 @@ Source0:        %{url}/archive/refs/tags/%{version}/%{name}-%{version}.tar.gz
 BuildRequires:  cmake
 BuildRequires:  clang
 BuildRequires:  compiler-rt
-BuildRequires:  pkgconfig(gl)
-BuildRequires:  pkgconfig(glu)
 BuildRequires:  pkgconfig(glfw3)
-BuildRequires:  pkgconfig(vulkan)
 BuildRequires:  glslc
+# OpenGL and Vulkan are loaded at run time (glfwGetProcAddress / volk):
+# no libGL, GLU or libvulkan link dependency.
+Provides:       bundled(volk)
+Provides:       bundled(miniaudio)
+Provides:       bundled(stb)
 
 # Automatic dependency generation handles libraries
 Requires:       %{name}-data = %{version}-%{release}
@@ -67,7 +69,7 @@ suite designed to manage and inspect data stored within the JSON files.
 
 
 %build
-%cmake
+%cmake -DDRAGONGL_SYSTEM_GLFW=ON
 %cmake_build
 
 
@@ -88,6 +90,8 @@ suite designed to manage and inspect data stored within the JSON files.
 %{_mandir}/man1/dragongl-server.1*
 %{_mandir}/man1/dragongl-client.1*
 %{_mandir}/man1/dragongl_reset_world.1*
+# licenses of the fonts embedded in the client
+%{_docdir}/%{name}/fonts/
 
 
 %files data
