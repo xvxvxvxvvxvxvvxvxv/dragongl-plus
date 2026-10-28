@@ -69,7 +69,9 @@ void ai_init_npc(NPC* npc, const char* monster_name, int floor_id) {
         npc->damage_dice   = 1  + (floor_id / 20);
         npc->damage_sides  = 6;
     }
-    npc->attack_bonus      = 2  + (floor_id / 4);
+    /*proficiency-like bonus: +4 on the first floors (a goblin hits AC 16
+     * about 45% of the time instead of 35%), growing with depth*/
+    npc->attack_bonus      = 4  + (floor_id / 3);
 
     //--- Archetype: JSON template takes priority ---
     const char* arch_str = NULL;

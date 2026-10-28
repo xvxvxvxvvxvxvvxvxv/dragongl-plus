@@ -137,6 +137,7 @@ void check_traps(Client *c, NPC *npcs);
 void client_track_explored_floor(Client *c);
 void broadcast_nearby_entities(Client *c, NPC *npcs);
 void client_seen_forget_npc(int npc_i);
+long long player_attack_interval_ms(const Client *c);
 /* Tell all clients on old_floor that c left it (hp<=0 removal message).
 * Call it whenever a player's floor_id changes (stairs, teleport, ...).*/
 void notify_player_left_floor(Client *c, int old_floor);

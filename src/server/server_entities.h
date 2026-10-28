@@ -199,6 +199,7 @@ typedef struct {
      * silently DROPPED those clicks. Commands now have their own bucket:
      * bursts of up to CMD_BURST, then one every CMD_INTERVAL_MS.*/
     long long cmd_tat_ms;
+    long long next_attack_ms;        /*melee: one attack per round (see player_attack_interval_ms)*/
     /*--- Phase 5: Grimoire - spells learned ---
 * Compact bitfield: bit N = 1 → magic index N in spell_database known.
      * Test: (known_spells[N/64] >> (N%64)) & 1

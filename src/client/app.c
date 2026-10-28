@@ -23,6 +23,7 @@
 
 #include "app.h"
 #include "assets.h"
+#include "classes.h"
 #include "audio.h"
 #include "path.h"
 #include "platform.h"
@@ -246,9 +247,26 @@ static float step_interval(int dx, int dy) {
     return cd;
 }
 
+/*Melee rhythm, same values as the server (player_attack_interval_ms):
+ * one attack per round, faster for martial classes from level 5.*/
+static float attack_interval(void) {
+    bool martial = g_class_id == CLASS_FIGHTER || g_class_id == CLASS_BARBARIAN || g_class_id == CLASS_PALADIN ||
+                   g_class_id == CLASS_RANGER || g_class_id == CLASS_MONK;
+    if (martial && g_my_level >= 11) return 0.5f;
+    if (martial && g_my_level >= 5) return 0.7f;
+    return 1.0f;
+}
+
 static void send_step(int dx, int dy) {
     client_send_move(dx, dy);
-    g_app.next_step_time = g_app.time + step_interval(dx, dy);
+    float iv = step_interval(dx, dy);
+    /*bumping a hostile creature is an attack: wait for the next round*/
+    int tx = g_app.snap->my_x + dx, ty = g_app.snap->my_y + dy;
+    for (int i = 0; i < CLIENT_MAX_ENTITIES; i++) {
+        const Entity *e = &g_app.snap->entities[i];
+        if (e->active && e->x == tx && e->y == ty && is_hostile(e)) { iv = fmaxf(iv, attack_interval()); break; }
+    }
+    g_app.next_step_time = g_app.time + iv;
     if (g_app.time - g_app.last_step_sound > 0.25) {
         audio_sfx_pitch(SFX_STEP, 0.35f, 0, 0.9f + (float)(rand() % 20) / 100.0f);
         g_app.last_step_sound = g_app.time;

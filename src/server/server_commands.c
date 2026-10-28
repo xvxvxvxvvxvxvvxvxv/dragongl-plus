@@ -1576,6 +1576,14 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
               npcs[i].spawn_y = ty;
               npcs[i].template_idx = tid;
               npcs[i].template = &bestiary_data[tid];
+              /*a reused slot may carry the state of its previous owner
+               * (respawn_timer -1 = permanently retired: the world loop
+               * skips such NPCs entirely, so the creature never acted)*/
+              npcs[i].respawn_timer = 0;
+              npcs[i].is_ghost = false;
+              npcs[i].effect_count = 0;
+              npcs[i].energy = 0;
+              npcs[i].morale = 0;
               /*full initialisation (AC, XP, damage, archetype, HP) exactly
                * like a natural spawn - not just the behaviour tree*/
               ai_init_npc(&npcs[i], npcs[i].template->name, c->floor_id);

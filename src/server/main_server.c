@@ -1515,6 +1515,19 @@ float get_current_weight(Client *c) {
   return w;
 }
 
+/*Melee rhythm. A monster of normal speed acts once per second (energy 2
+ * per 200 ms tick, threshold 10), so a round is 1 s; martial classes get
+ * the Extra Attack feature from level 5 (shorter interval). The client
+ * paces its attacks with the same values (app.c).*/
+long long player_attack_interval_ms(const Client *c) {
+  bool martial = c->class_id == CLASS_FIGHTER || c->class_id == CLASS_BARBARIAN ||
+                 c->class_id == CLASS_PALADIN || c->class_id == CLASS_RANGER ||
+                 c->class_id == CLASS_MONK;
+  if (martial && c->level >= 11) return 500;
+  if (martial && c->level >= 5) return 700;
+  return 1000;
+}
+
 float get_movement_cooldown(Client *c) {
   float w = get_current_weight(c);
   /*Item weights in the database are POUNDS (chain mail 55, greatsword
@@ -2953,6 +2966,7 @@ int main(int argc, char **argv) {
                 clients[i].sock = cs;
                 clients[i].active = true;
                 clients[i].last_action_ms = 0;
+                clients[i].next_attack_ms = 0;
                 clients[i].cmd_tat_ms = 0;
                 clients[i].authenticated = false;
                 client_seen_reset(i, -1);
@@ -3440,7 +3454,13 @@ int main(int argc, char **argv) {
                            save_player_data(&clients[i]);
                          }
                        } else {
-                         perform_attack(&clients[i], &npcs[n], npcs);
+                         /*One melee attack per round, like the monsters
+                          * (bumping used to attack at the 5/s movement
+                          * rate, giving monsters no time to answer).*/
+                         if (now_ms >= clients[i].next_attack_ms) {
+                           perform_attack(&clients[i], &npcs[n], npcs);
+                           clients[i].next_attack_ms = now_ms + player_attack_interval_ms(&clients[i]);
+                         }
                          coll = true;
                        }
                     }

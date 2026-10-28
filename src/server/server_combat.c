@@ -79,7 +79,9 @@ void perform_attack(Client *c, NPC *t, NPC *npcs) {
   int inst_to_hit = (weapon && weapon->template_idx != -1) ? weapon->to_hit_bonus : 0;
   RuleContext ctx;
   ctx.type = EVENT_ON_ATTACK;
-  ctx.base_value = (w ? w->attack_bonus : 0) + inst_to_hit + a_mod + (c->level / 2);
+  /*+2 base proficiency (a level-1 hero with average Strength used to roll
+   * at +0, missing most blows), then +1 every 2 levels as before*/
+  ctx.base_value = (w ? w->attack_bonus : 0) + inst_to_hit + a_mod + 2 + (c->level / 2);
   ctx.source_id = c->entity_id;
   ctx.target_id = t->entity_id;
   rules_apply_modifiers(&ctx, c->effects, c->effect_count);

@@ -164,7 +164,7 @@ void send_detailed_state(Client *c) {
       w2 = &item_database[c->slot_hand_l.template_idx];
     int a_mod = (w2 && w2->damage_dice_sides <= 6) ? rules_get_modifier(td2)
                                                    : rules_get_modifier(ts2);
-    s.to_hit = (w2 ? w2->attack_bonus : 0) + a_mod + (c->level / 2);
+    s.to_hit = (w2 ? w2->attack_bonus : 0) + a_mod + 2 + (c->level / 2); /*see perform_attack*/
   }
 
   //--- POPULATION OF STATUS ICONS (BITMASK) ---
@@ -310,8 +310,29 @@ void client_seen_reset(int ci, int floor) {
  * respawns - compact updates for unknown ids are ignored client-side.*/
 void client_seen_forget_npc(int npc_i) {
   if (npc_i < 0 || npc_i >= MAX_NPCS) return;
-  for (int ci = 0; ci < MAX_CLIENTS; ci++)
-    g_client_seen_entities[ci][npc_i >> 3] &= (uint8_t)~(1u << (npc_i & 7));
+  const NPC *n = g_npcs ? &g_npcs[npc_i] : NULL;
+  for (int ci = 0; ci < MAX_CLIENTS; ci++) {
+    uint8_t bit = (uint8_t)(1u << (npc_i & 7));
+    if (!(g_client_seen_entities[ci][npc_i >> 3] & bit)) continue;
+    g_client_seen_entities[ci][npc_i >> 3] &= (uint8_t)~bit;
+    /*Tell that client to drop it (hp <= 0 removal, as for players): gold
+     * piles that were picked up, opened chests, creatures that vanished
+     * otherwise stayed on its screen. A killed creature also gets this
+     * after GEV_KILL; the client keeps it for the death animation.*/
+    if (n && g_clients && g_clients[ci].active && g_clients[ci].authenticated &&
+        g_clients[ci].floor_id == n->floor_id) {
+      MsgHeader h = msg_hdr(MSG_STATE, (int)sizeof(MsgState));
+      MsgState s;
+      memset(&s, 0, sizeof(s));
+      s.entity_id = n->entity_id;
+      s.x = n->x;
+      s.y = n->y;
+      s.hp = 0;
+      s.floor_id = n->floor_id;
+      net_send_client(g_clients[ci].sock, &h, sizeof(h));
+      net_send_client(g_clients[ci].sock, &s, sizeof(s));
+    }
+  }
 }
 
 static inline void player_seen_set(int ci, int pi) {

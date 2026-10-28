@@ -237,7 +237,9 @@ void *net_thread_loop(void *arg) {
                     if (free_slot < 0 && !g_entities[i].active) free_slot = i;
                 }
                 if (st.hp <= 0) {
-                    if (slot >= 0) {
+                    /*removal; a creature just killed stays for its death
+                     * animation (killed_at_ms, dropped by the snapshot)*/
+                    if (slot >= 0 && !g_entities[slot].killed_at_ms) {
                         g_entities[slot].active = false;
                         g_entities[slot].id = 0;
                         g_entities[slot].floor_id = -1;
