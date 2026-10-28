@@ -756,7 +756,7 @@ bool app_init(const GfxBackend *gfx) {
         w = vm->width;
         h = vm->height;
     }
-    g_app.win = glfwCreateWindow(w, h, "Dragon GL - The Long Descent", mon, NULL);
+    g_app.win = glfwCreateWindow(w, h, "DragonGL+ - The Long Descent", mon, NULL);
     if (!g_app.win) return false;
     {
         GLFWimage icons[2] = {{64, 64, (unsigned char *)asset_icon64}, {32, 32, (unsigned char *)asset_icon32}};

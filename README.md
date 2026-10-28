@@ -1,5 +1,11 @@
 <div style="text-align: center; border-bottom: 1px solid #ccc; margin-bottom: 20px;">
-<h1>Dragon GL: The Long Descent into the Dragon's Maw</h1>
+<h1>DragonGL+ : The Long Descent into the Dragon's Maw</h1>
+
+**DragonGL+** is a fork of [Dragon GL](https://github.com/nicolataibi/dragongl) by Nicola Taibi
+with a new graphical client, a procedural soundtrack, many gameplay fixes and
+ready-to-play builds for Windows and Linux.
+
+### ⬇️ [Download for Windows](https://github.com/xvxvxvxvvxvxvvxvxv/dragongl-plus/releases/latest/download/DragonGL-Plus-windows-x64.zip) · [Download for Linux](https://github.com/xvxvxvxvvxvxvvxvxv/dragongl-plus/releases/latest/download/DragonGL-Plus-linux-x86_64.tar.gz) · [All releases](https://github.com/xvxvxvxvvxvxvvxvxv/dragongl-plus/releases)
 
 ![Version](https://img.shields.io/badge/Version-3.0-green)
 ![License](https://img.shields.io/badge/License-GPL%203.0-blue.svg)
@@ -61,14 +67,14 @@ improvements. **Download, unzip, double-click: nothing to install.**
 
 ## ▶️ Download & play
 
-| Platform | Package | How to start |
-|----------|---------|--------------|
-| **Windows 10/11** (x64) | `DragonGL-<version>-windows-x64.zip` | unzip, double-click **`DragonGL.exe`** |
-| **Linux** (x86-64, glibc ≥ 2.27: Ubuntu 18.04+, Debian 10+, Fedora 28+, ...) | `DragonGL-<version>-linux-x86_64.tar.gz` | extract, double-click **`DragonGL`** (or `./DragonGL`) |
+| Platform | Download | How to start |
+|----------|----------|--------------|
+| **Windows 10/11** (x64) | [**DragonGL-Plus-windows-x64.zip**](https://github.com/xvxvxvxvvxvxvvxvxv/dragongl-plus/releases/latest/download/DragonGL-Plus-windows-x64.zip) | unzip, double-click **`DragonGL-Plus.exe`** |
+| **Linux** (x86-64, glibc ≥ 2.27: Ubuntu 18.04+, Debian 10+, Fedora 28+, ...) | [**DragonGL-Plus-linux-x86_64.tar.gz**](https://github.com/xvxvxvxvvxvxvvxvxv/dragongl-plus/releases/latest/download/DragonGL-Plus-linux-x86_64.tar.gz) | extract, double-click **`DragonGL-Plus`** (or `./DragonGL-Plus`) |
 
-The packages are produced by the GitHub Actions workflow (`.github/workflows/ci.yml`:
-artifacts of every build, GitHub Release for every `v*` tag) or locally with
-`tools/build_release.sh`. They are **self-contained**: fonts, shaders, icon and the
+Older versions and checksums are on the [Releases page](https://github.com/xvxvxvxvvxvxvvxvxv/dragongl-plus/releases).
+The packages are built by `tools/build_release.sh` (and by the GitHub Actions
+workflow `.github/workflows/ci.yml`, which publishes a Release for every `v*` tag). They are **self-contained**: fonts, shaders, icon and the
 whole soundtrack live inside the executable; on Windows the C runtime is static
 (only system DLLs are used), on Linux only glibc and the graphics driver are needed.
 A graphics driver with **OpenGL 3.3** or **Vulkan 1.3** is enough.

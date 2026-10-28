@@ -56,7 +56,7 @@ jobs:
         run: tools/build_release.sh linux
       - uses: actions/upload-artifact@v4
         with:
-          name: DragonGL-linux-x86_64
+          name: DragonGL-Plus-linux-x86_64
           path: dist/*.tar.gz
 
   windows:
@@ -72,7 +72,7 @@ jobs:
         run: tools/build_release.sh windows
       - uses: actions/upload-artifact@v4
         with:
-          name: DragonGL-windows-x64
+          name: DragonGL-Plus-windows-x64
           path: dist/*.zip
 
   release:

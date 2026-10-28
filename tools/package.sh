@@ -1,13 +1,13 @@
 #!/bin/sh
-# DRAGON GL - portable package builder
+# DragonGL+ - portable package builder
 # Copyright (C) 2026 Nicola Taibi - GPL-3.0-or-later
 #
 # Turns a finished build directory into a ready-to-play archive:
 #
 #   tools/package.sh <build-dir> <linux|windows> [out-dir]
 #
-#   DragonGL-<version>-<platform>/
-#     DragonGL(.exe)          the game (client); double-click to play
+#   DragonGL-Plus-<platform>/
+#     DragonGL-Plus(.exe)     the game (client); double-click to play
 #     dragongl_server(.exe)   dedicated server (also started by "Play Solo")
 #     data/                   game data (bestiary, items, spells)
 #     README-PLAY.txt         how to play (EN/IT)
@@ -32,14 +32,15 @@ windows) EXE=".exe"; ARCH=windows-x64 ;;
 *) echo "unknown platform: $PLATFORM" >&2; exit 1 ;;
 esac
 
-NAME="DragonGL-$VERSION-$ARCH"
+NAME="DragonGL-Plus-$ARCH"   # stable name: releases/latest/download/<name> links
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 STAGE="$OUT/$NAME"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/data" "$STAGE/licenses"
 
-cp "$BUILD/dragongl_client$EXE" "$STAGE/DragonGL$EXE"
+cp "$BUILD/dragongl_client$EXE" "$STAGE/DragonGL-Plus$EXE"
+echo "$VERSION" > "$STAGE/VERSION.txt"
 cp "$BUILD/dragongl_server$EXE" "$STAGE/dragongl_server$EXE"
 cp "$ROOT/data/bestiary.json" "$ROOT/data/items.json" "$ROOT/data/spells.json" "$STAGE/data/"
 cp "$ROOT/res/README-PLAY.txt" "$STAGE/"
@@ -64,8 +65,8 @@ EOF
 
 cd "$OUT"
 if [ "$PLATFORM" = linux ]; then
-    strip "$STAGE/DragonGL" "$STAGE/dragongl_server" 2>/dev/null || true
-    chmod 755 "$STAGE/DragonGL" "$STAGE/dragongl_server"
+    strip "$STAGE/DragonGL-Plus" "$STAGE/dragongl_server" 2>/dev/null || true
+    chmod 755 "$STAGE/DragonGL-Plus" "$STAGE/dragongl_server"
     # desktop entry + icon, for users who want a menu shortcut
     cp "$ROOT/res/dragongl.png" "$STAGE/dragongl.png"
     cat > "$STAGE/install-desktop-shortcut.sh" <<'EOF'
@@ -73,24 +74,24 @@ if [ "$PLATFORM" = linux ]; then
 # Adds Dragon GL to the applications menu of the current user.
 HERE=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$HOME/.local/share/applications"
-cat > "$HOME/.local/share/applications/dragongl.desktop" <<EOD
+cat > "$HOME/.local/share/applications/dragongl-plus.desktop" <<EOD
 [Desktop Entry]
 Type=Application
-Name=Dragon GL
+Name=DragonGL+
 Comment=The Long Descent into the Dragon's Maw
-Exec="$HERE/DragonGL"
+Exec="$HERE/DragonGL-Plus"
 Path=$HERE
 Icon=$HERE/dragongl.png
 Categories=Game;RolePlaying;
 Terminal=false
 EOD
-echo "Dragon GL added to your applications menu."
+echo "DragonGL+ added to your applications menu."
 EOF
     chmod 755 "$STAGE/install-desktop-shortcut.sh"
     tar -czf "$NAME.tar.gz" "$NAME"
     echo "$OUT/$NAME.tar.gz"
 else
-    x86_64-w64-mingw32-strip "$STAGE/DragonGL.exe" "$STAGE/dragongl_server.exe" 2>/dev/null || true
+    x86_64-w64-mingw32-strip "$STAGE/DragonGL-Plus.exe" "$STAGE/dragongl_server.exe" 2>/dev/null || true
     # Windows users expect CRLF in text files opened with Notepad
     for f in "$STAGE/README-PLAY.txt" "$STAGE/LICENSE.txt"; do
         sed 's/$/\r/' "$f" > "$f.tmp" && mv "$f.tmp" "$f"

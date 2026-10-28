@@ -1,14 +1,14 @@
-DRAGON GL - THE LONG DESCENT INTO THE DRAGON'S MAW
-DragonGL+ edition
-(C) 2026 Nicola Taibi - GPL-3.0-or-later - https://github.com/nicolataibi/dragongl
+DRAGONGL+ - THE LONG DESCENT INTO THE DRAGON'S MAW
+https://github.com/xvxvxvxvvxvxvvxvxv/dragongl-plus
+A fork of Dragon GL, (C) 2026 Nicola Taibi - GPL-3.0-or-later - https://github.com/nicolataibi/dragongl
 
 =============================================================================
  ENGLISH
 =============================================================================
 
 HOW TO START
-  Windows : double-click  DragonGL.exe
-  Linux   : double-click  DragonGL  (or run ./DragonGL from a terminal)
+  Windows : double-click  DragonGL-Plus.exe
+  Linux   : double-click  DragonGL-Plus  (or run ./DragonGL-Plus from a terminal)
 
 Nothing needs to be installed: the game, its music and its fonts are all
 inside the executable. You only need a graphics driver with OpenGL 3.3 or
@@ -41,7 +41,7 @@ CONTROLS (all of them are also listed in game: press F1 or H)
 
 GRAPHICS
   The game picks OpenGL by default; Vulkan can be selected in
-  Settings -> Graphics (or start with:  DragonGL vk ). If a renderer is
+  Settings -> Graphics (or start with:  DragonGL-Plus vk ). If a renderer is
   not available the game falls back to the other one automatically.
 
 =============================================================================
@@ -49,8 +49,8 @@ GRAPHICS
 =============================================================================
 
 COME AVVIARE
-  Windows : doppio clic su  DragonGL.exe
-  Linux   : doppio clic su  DragonGL  (oppure ./DragonGL da terminale)
+  Windows : doppio clic su  DragonGL-Plus.exe
+  Linux   : doppio clic su  DragonGL-Plus  (oppure ./DragonGL-Plus da terminale)
 
 Non serve installare nulla: gioco, musiche e font sono dentro l'eseguibile.
 Basta un driver grafico con OpenGL 3.3 o Vulkan 1.3.

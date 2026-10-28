@@ -158,8 +158,8 @@ static void title_logo(float cx, float y, float a) {
     float pulse = 0.85f + 0.15f * sinf((float)g_app.time * 1.4f);
     uint32_t glow = UIC(255, 140, 40, (int)(70 * a * pulse));
     for (int i = 4; i >= 1; i--)
-        ui_text(FONT_TITLE, 96, cx + (float)i * 0.7f, y + (float)i * 0.7f, "DRAGON GL", glow, ALIGN_CENTER);
-    ui_text_shadow(FONT_TITLE, 96, cx, y, "DRAGON GL", ui_alpha(UIC(240, 200, 120, 255), a), ALIGN_CENTER);
+        ui_text(FONT_TITLE, 96, cx + (float)i * 0.7f, y + (float)i * 0.7f, "DRAGON GL+", glow, ALIGN_CENTER);
+    ui_text_shadow(FONT_TITLE, 96, cx, y, "DRAGON GL+", ui_alpha(UIC(240, 200, 120, 255), a), ALIGN_CENTER);
     float lw = 520;
     ui_rect_hgrad(cx - lw, y + 118, lw, 1.5f, UIC(222, 184, 96, 0), ui_alpha(COL_GOLD, a));
     ui_rect_hgrad(cx, y + 118, lw, 1.5f, ui_alpha(COL_GOLD, a), UIC(222, 184, 96, 0));
