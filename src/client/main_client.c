@@ -83,8 +83,10 @@ int main(int argc, char **argv) {
     }
     audio_init();
 
+    /*Probe Vulkan once, now, before any window or GL context exists.*/
+    bool vk_ok = gfx_vk_available();
     const GfxBackend *gfx = backend == 1 ? &gfx_vk_backend : &gfx_gl_backend;
-    if (backend == 1 && !gfx_vk_available()) {
+    if (backend == 1 && !vk_ok) {
         fprintf(stderr, "[VK] no Vulkan driver found: falling back to OpenGL.\n");
         gfx = &gfx_gl_backend;
     }

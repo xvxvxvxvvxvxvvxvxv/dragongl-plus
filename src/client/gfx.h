@@ -142,5 +142,9 @@ extern const GfxBackend gfx_gl_backend;
 extern const GfxBackend gfx_vk_backend;
 /*Is a Vulkan driver present at all? (volk can load the loader)*/
 bool gfx_vk_available(void);
+/*Result of the start-up probe (never touches the Vulkan loader again:
+ * probing it while an OpenGL context is current crashed on some drivers
+ * with overlay layers installed).*/
+bool gfx_vk_cached(void);
 
 #endif

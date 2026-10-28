@@ -132,6 +132,8 @@ float scene_cam_yaw(void) { return cam_yaw; }
 v3 scene_player_pos(void) { return v3m(g_me.x, 0, g_me.z); }
 
 static bool g_preview;
+static bool g_gallery;
+void scene_set_gallery(bool on) { g_gallery = on; }
 
 static void update_camera(float dt, v3 target, bool title, double time) {
     if (!cam_init) {
@@ -144,6 +146,13 @@ static void update_camera(float dt, v3 target, bool title, double time) {
         cam_yaw_t = 0.35f;
         cam_pitch_t = 0.20f;
         cam_dist_t = 5.4f;
+    } else if (title && g_gallery) {
+        const char *gy = getenv("DRAGONGL_GALLERY_YAW");
+        cam_yaw_t = gy ? (float)atof(gy) : 0.25f;
+        cam_pitch_t = 0.22f;
+        const char *gs = getenv("DRAGONGL_GALLERY");
+        cam_dist_t = (gs && gs[0] == 'r') ? 3.2f : (gs && gs[0] == 'd') ? 6.0f : 8.5f;
+        if (gs && gs[0] == 'd') cam_pitch_t = 0.7f;
     } else if (title) {
         cam_yaw_t = (float)time * 0.05f;
         cam_pitch_t = 0.62f;
@@ -756,6 +765,7 @@ void scene_frame(const FrameSnapshot *snap, const SceneInput *in, float dt, doub
         amb[0] = 0.17f - depth * 0.06f; amb[1] = 0.155f - depth * 0.05f; amb[2] = 0.21f - depth * 0.04f;
     }
     if (in->title_mode) { amb[0] = 0.20f; amb[1] = 0.19f; amb[2] = 0.27f; }
+    if (in->title_mode && g_gallery) { amb[0] = 0.85f; amb[1] = 0.82f; amb[2] = 0.8f; }
     float br = in->brightness > 0 ? in->brightness : 1.0f;
     u->ambient[0] = amb[0] * br; u->ambient[1] = amb[1] * br; u->ambient[2] = amb[2] * br;
     u->ambient[3] = town ? 0.45f : 0.62f; /*memory brightness (explored, out of sight)*/

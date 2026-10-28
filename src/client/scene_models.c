@@ -96,8 +96,18 @@ static void rglow_sprite(const Rig *g, v3 lp, float size, uint32_t col) {
 
 static void reyes(const Rig *g, v3 head_c, float spread, float size, uint32_t col, float glow) {
     Mat e = rmat(g, MAT_WHITE, col, glow);
-    rbox(g, v3add(head_c, v3m(-spread, 0, 0)), v3m(size, size, size * 0.5f), m3identity(), e);
-    rbox(g, v3add(head_c, v3m(spread, 0, 0)), v3m(size, size, size * 0.5f), m3identity(), e);
+    if (glow > 0.5f) {
+        rbox(g, v3add(head_c, v3m(-spread, 0, 0)), v3m(size, size, size * 0.5f), m3identity(), e);
+        rbox(g, v3add(head_c, v3m(spread, 0, 0)), v3m(size, size, size * 0.5f), m3identity(), e);
+    } else {
+        /*white of the eye + dark pupil: readable on any skin, even dark fur*/
+        Mat white = rmat(g, MAT_WHITE, RGBA8(235, 232, 225, 255), 0.15f);
+        for (int s = -1; s <= 1; s += 2) {
+            v3 c = v3add(head_c, v3m(spread * (float)s, 0, 0));
+            rbox(g, c, v3m(size * 1.15f, size * 0.95f, size * 0.5f), m3identity(), white);
+            rbox(g, v3add(c, v3m(0, -size * 0.1f, size * 0.45f)), v3m(size * 0.6f, size * 0.7f, size * 0.2f), m3identity(), e);
+        }
+    }
     if (glow > 0.5f) {
         rglow_sprite(g, v3add(head_c, v3m(-spread, 0, 0.02f)), size * 4, col_scale(col, 0.6f));
         rglow_sprite(g, v3add(head_c, v3m(spread, 0, 0.02f)), size * 4, col_scale(col, 0.6f));
@@ -151,7 +161,9 @@ int weapon_from_name(const char *n) {
 /*Draw a weapon held at hand position `h` with orientation r (local
  * frame of the arm: the blade points along -Y of r rotated forward).*/
 static void weapon(const Rig *g, int w, v3 hand, m3 arm) {
-    m3 r = m3mul(arm, m3rotx(-1.5708f)); /*point the weapon forward along the arm's end*/
+    /*The arm hangs along -Y; the weapon's +Y is turned 1 rad forward from
+     * it, so a resting blade points forward-up and a strike ends level.*/
+    m3 r = m3mul(arm, m3rotx(1.0f));
     Mat steel = rmat(g, MAT_METAL, RGBA8(210, 214, 222, 255), 0.05f);
     Mat wood = rmat(g, MAT_PLANK, RGBA8(140, 96, 56, 255), 0);
     Mat gold = rmat(g, MAT_METAL, RGBA8(230, 190, 80, 255), 0.1f);
@@ -207,17 +219,31 @@ static void weapon(const Rig *g, int w, v3 hand, m3 arm) {
 
 typedef struct {
     float height, width;
-    uint32_t skin, cloth, cloth2, hair, metal;
+    uint32_t skin, skin2, cloth, cloth2, hair, metal;
     int skin_mat, cloth_mat;
     bool horns, big_horns, tail, ears_pointy, ears_cat, beak, snout, shell, halo, wings, fairy_wings;
     bool skeleton, hood, hat, beard, glow_eyes, apron, crown, robe;
+    bool trunk, ears_big, centaur;
     uint32_t eye_col;
     int weapon;
     bool shield, helm, cape;
     float hover;
 } HumanoidLook;
 
-static void humanoid(const Rig *g0, const ModelParams *p, const HumanoidLook *L, ModelOut *out) {
+/*Monsters: anatomy hinted by the name (players use their race instead).*/
+static void name_features(HumanoidLook *L, const char *nm) {
+    if (!nm || !nm[0]) return;
+    if (strcasestr(nm, "centaur")) L->centaur = true;
+    if (strcasestr(nm, "minotaur")) { L->big_horns = true; L->snout = true; L->skin_mat = MAT_FUR; }
+    if (strcasestr(nm, "kobold") || strcasestr(nm, "lizard") || strcasestr(nm, "saurian")) { L->snout = true; L->tail = true; }
+    if (strcasestr(nm, "elephant")) { L->trunk = true; L->ears_big = true; }
+}
+
+static void humanoid(const Rig *g0, const ModelParams *p, const HumanoidLook *L0, ModelOut *out) {
+    HumanoidLook Lv = *L0;
+    if (p->kind != KIND_PLAYER) name_features(&Lv, p->name);
+    if (Lv.centaur && !Lv.skin2) Lv.skin2 = col_scale(Lv.skin, 0.7f);
+    const HumanoidLook *L = &Lv;
     Rig rg = *g0;
     Rig *g = &rg;
     float H = L->height, W = L->width;
@@ -237,8 +263,27 @@ static void humanoid(const Rig *g0, const ModelParams *p, const HumanoidLook *L,
     Mat cloth2 = rmat(g, clm, L->cloth2, 0);
     Mat boot = rmat(g, MAT_LEATHER, col_scale(L->cloth2, 0.6f), 0);
 
+    /*centaur: horse body behind the human torso, four legs*/
+    if (L->centaur) {
+        Mat hide = rmat(g, MAT_FUR, L->skin2 ? L->skin2 : col_scale(L->skin, 0.75f), 0);
+        float body_y = hip_y - 0.06f;
+        rbox(g, v3m(0, body_y, -0.30f), v3m(0.17f * W, 0.13f, 0.38f), m3identity(), hide);
+        static const float LZ[4] = {0.0f, 0.0f, -0.6f, -0.6f};
+        for (int i = 0; i < 4; i++) {
+            float s = (i & 1) ? 1.0f : -1.0f;
+            float a = sw * 0.6f * s * (i < 2 ? 1.0f : -1.0f);
+            v3 pv = v3m(0.11f * W * s, body_y - 0.06f, LZ[i]);
+            m3 r = m3rotx(a);
+            rlimb(g, pv, 0.045f, (body_y - 0.06f - y0) * 0.55f, 0.05f, r, hide);
+            v3 knee = limb_end(pv, (body_y - 0.06f - y0) * 0.55f, r);
+            rlimb(g, knee, 0.04f, (body_y - 0.06f - y0) * 0.45f, 0.045f, m3rotx(a * 0.4f), boot);
+        }
+        float wag = sinf(t * 2.5f) * 0.3f;
+        rlimb(g, v3m(0, body_y + 0.08f, -0.68f), 0.035f, 0.42f, 0.03f, m3mul(m3roty(wag), m3rotx(0.7f)),
+              rmat(g, MAT_FUR, L->hair, 0));
+    }
     /*legs*/
-    for (int s = -1; s <= 1; s += 2) {
+    for (int s = -1; s <= 1 && !L->centaur; s += 2) {
         float a = sw * 0.7f * (float)s;
         m3 r = m3rotx(a);
         v3 pv = v3m(0.09f * W * (float)s, hip_y, 0);
@@ -259,7 +304,7 @@ static void humanoid(const Rig *g0, const ModelParams *p, const HumanoidLook *L,
         for (int i = 0; i < 4; i++)
             rbox(g, v3m(0, hip_y + torso * (0.45f + 0.13f * (float)i), 0.02f), v3m(0.15f * W, 0.018f, 0.09f), m3identity(), bone);
         rbox(g, v3m(0, hip_y + 0.02f, 0), v3m(0.14f * W, 0.04f, 0.07f), m3identity(), bone);
-    } else if (L->robe) {
+    } else if (L->robe && !L->centaur) {
         rprism(g, v3m(0, y0, 0), 0.26f * W, 0.17f * W, leg + torso * 0.55f, 8, m3identity(), cloth);
         rbox(g, v3m(0, hip_y + torso * 0.72f + breathe, 0), v3m(0.18f * W, torso * 0.3f, 0.12f), m3identity(), cloth);
     } else {
@@ -319,10 +364,29 @@ static void humanoid(const Rig *g0, const ModelParams *p, const HumanoidLook *L,
     v3 hc = v3m(0, head_y, 0.01f);
     float hw = 0.13f * (L->skeleton ? 0.9f : 1.0f);
     rbox(g, hc, v3m(hw, headh * 0.55f, hw), m3identity(), skin);
-    if (L->snout)
-        rbox(g, v3add(hc, v3m(0, -0.03f, hw + 0.06f)), v3m(0.07f, 0.06f, 0.08f), m3identity(), skin);
-    if (L->beak)
-        rprism(g, v3add(hc, v3m(0, -0.01f, hw)), 0.05f, 0.0f, 0.14f, 4, m3rotx(1.5708f), rmat(g, MAT_BONE, RGBA8(230, 180, 60, 255), 0));
+    /*muzzles sit below eye level so the eyes stay visible above them*/
+    float eye_y = 0.01f;
+    if (L->snout) {
+        rbox(g, v3add(hc, v3m(0, -0.055f, hw + 0.05f)), v3m(0.075f, 0.05f, 0.07f), m3identity(), skin);
+        rbox(g, v3add(hc, v3m(0, -0.03f, hw + 0.115f)), v3m(0.04f, 0.015f, 0.008f), m3identity(),
+             rmat(g, MAT_SKIN, col_scale(L->skin, 0.45f), 0)); /*nostrils*/
+        eye_y = fminf(0.04f, headh * 0.55f - 0.035f); /*small heads: stay under hats and hoods*/
+    }
+    if (L->trunk) {
+        Mat tr = skin;
+        float sway = sinf(t * 1.7f) * 0.15f;
+        rlimb(g, v3add(hc, v3m(0, -0.01f, hw + 0.02f)), 0.035f, 0.16f, 0.035f, m3rotx(0.35f + sway * 0.3f), tr);
+        v3 mid = limb_end(v3add(hc, v3m(0, -0.01f, hw + 0.02f)), 0.16f, m3rotx(0.35f + sway * 0.3f));
+        rlimb(g, mid, 0.028f, 0.16f, 0.028f, m3mul(m3rotz(sway), m3rotx(0.1f)), tr);
+        Mat tusk = rmat(g, MAT_BONE, RGBA8(240, 235, 215, 255), 0);
+        for (int s = -1; s <= 1; s += 2)
+            rprism(g, v3add(hc, v3m(0.06f * (float)s, -0.06f, hw + 0.01f)), 0.018f, 0.0f, 0.12f, 4, m3rotx(1.2f), tusk);
+        eye_y = 0.04f;
+    }
+    if (L->beak) {
+        rprism(g, v3add(hc, v3m(0, -0.04f, hw)), 0.045f, 0.0f, 0.14f, 4, m3rotx(1.5708f), rmat(g, MAT_BONE, RGBA8(230, 180, 60, 255), 0));
+        eye_y = 0.03f;
+    }
     if (L->beard)
         rbox(g, v3add(hc, v3m(0, -headh * 0.45f, hw * 0.8f)), v3m(hw * 0.8f, headh * 0.35f, 0.05f), m3identity(), rmat(g, MAT_FUR, L->hair, 0));
     /*hair / hood / hat / helm*/
@@ -331,7 +395,16 @@ static void humanoid(const Rig *g0, const ModelParams *p, const HumanoidLook *L,
         rbox(g, v3add(hc, v3m(0, headh * 0.25f, -0.01f)), v3m(hw + 0.025f, headh * 0.38f, hw + 0.025f), m3identity(), hm);
         rbox(g, v3add(hc, v3m(0, headh * 0.25f + 0.05f, hw + 0.03f)), v3m(0.02f, headh * 0.3f, 0.01f), m3identity(), hm);
     } else if (L->hood) {
-        rbox(g, v3add(hc, v3m(0, headh * 0.15f, -0.02f)), v3m(hw + 0.03f, headh * 0.62f, hw + 0.02f), m3identity(), cloth2);
+        /*open-faced: crown, back and two side panels around the head (the
+         * old single box enclosed the face and z-fought with it)*/
+        float top = headh * 0.55f, th = 0.022f, out_r = hw + 0.012f + th;
+        rbox(g, v3add(hc, v3m(0, top + th, 0.005f)), v3m(out_r, th, hw + 0.035f), m3identity(), cloth2);
+        rbox(g, v3add(hc, v3m(0, top * 0.1f, -(hw + 0.012f + th))), v3m(out_r, top + th, th), m3identity(), cloth2);
+        for (int s = -1; s <= 1; s += 2)
+            rbox(g, v3add(hc, v3m((hw + 0.012f + th) * (float)s, top * 0.1f, 0.0f)), v3m(th, top + th, hw + 0.02f),
+                 m3identity(), cloth2);
+        /*drape over the shoulders*/
+        rbox(g, v3add(hc, v3m(0, -top - 0.02f, -0.03f)), v3m(out_r + 0.02f, 0.035f, hw + 0.02f), m3identity(), cloth2);
     } else if (L->hat) {
         rbox(g, v3add(hc, v3m(0, headh * 0.55f, 0)), v3m(hw + 0.09f, 0.015f, hw + 0.09f), m3identity(), cloth2);
         rprism(g, v3add(hc, v3m(0, headh * 0.55f, 0)), hw + 0.01f, 0.0f, 0.34f, 6, m3rotx(-0.15f), cloth2);
@@ -355,10 +428,14 @@ static void humanoid(const Rig *g0, const ModelParams *p, const HumanoidLook *L,
     if (L->ears_pointy)
         for (int s = -1; s <= 1; s += 2)
             rbox(g, v3add(hc, v3m((hw + 0.02f) * (float)s, 0.02f, -0.02f)), v3m(0.02f, 0.03f, 0.05f), m3rotx(-0.6f), skin);
+    if (L->ears_big)
+        for (int s = -1; s <= 1; s += 2)
+            rbox(g, v3add(hc, v3m((hw + 0.07f) * (float)s, 0.0f, -0.02f)), v3m(0.07f, 0.11f, 0.012f),
+                 m3roty(0.5f * (float)s), skin);
     if (L->ears_cat)
         for (int s = -1; s <= 1; s += 2)
             rprism(g, v3add(hc, v3m(hw * 0.6f * (float)s, headh * 0.5f, 0)), 0.05f, 0.0f, 0.09f, 3, m3identity(), skin);
-    reyes(g, v3add(hc, v3m(0, 0.01f, hw + 0.002f)), 0.05f, 0.018f, L->eye_col, L->glow_eyes ? 1.0f : 0.0f);
+    reyes(g, v3add(hc, v3m(0, eye_y, hw + 0.004f)), 0.05f, 0.018f, L->eye_col, L->glow_eyes ? 1.0f : 0.0f);
     if (L->halo) {
         float hy = head_y + headh * 0.9f + sinf(t * 2) * 0.02f;
         Mat ring = rmat(g, MAT_METAL, RGBA8(255, 230, 120, 255), 1.0f);
@@ -370,7 +447,8 @@ static void humanoid(const Rig *g0, const ModelParams *p, const HumanoidLook *L,
     }
     if (L->tail) {
         float wag = sinf(t * 3.0f) * 0.4f;
-        rlimb(g, v3m(0, hip_y, -0.12f), 0.03f, 0.45f * H, 0.03f, m3mul(m3roty(wag), m3rotx(-2.2f)), skin);
+        /*rotx(+) swings the limb's -Y towards -Z: out of the back, slightly up*/
+        rlimb(g, v3m(0, hip_y, -0.12f), 0.03f, 0.45f * H, 0.03f, m3mul(m3roty(wag), m3rotx(1.95f)), skin);
     }
     if (L->wings || L->fairy_wings) {
         float flap = sinf(t * (L->fairy_wings ? 14.0f : 5.0f)) * 0.5f;
@@ -693,7 +771,8 @@ static void race_look(HumanoidLook *L, int race, uint32_t seed) {
     case RACE_WARFORGED: L->skin = RGBA8(150, 150, 140, 255); L->skin_mat = MAT_METAL; L->glow_eyes = true; L->eye_col = RGBA8(120, 200, 255, 255); break;
     case RACE_SATYR: L->horns = true; break;
     case RACE_HARENGON: L->ears_cat = true; L->skin_mat = MAT_FUR; L->skin = RGBA8(230, 220, 210, 255); break;
-    case RACE_LOXODON: L->height = 1.2f; L->width = 1.3f; L->skin = RGBA8(150, 150, 150, 255); L->snout = true; break;
+    case RACE_LOXODON: L->height = 1.2f; L->width = 1.3f; L->skin = RGBA8(150, 150, 150, 255); L->trunk = true; L->ears_big = true; break;
+    case RACE_CENTAUR: L->centaur = true; L->skin2 = seed_col(seed, 7, 0.05f, 0.06f, 0.55f, 0.45f); L->hair = col_scale(L->skin2, 0.6f); break;
     case RACE_DHAMPIR: L->skin = RGBA8(230, 225, 230, 255); L->glow_eyes = true; L->eye_col = RGBA8(255, 60, 60, 255); break;
     case RACE_PLASMOID: L->skin = seed_col(seed, 6, 0.3f, 0.5f, 0.6f, 0.8f); L->skin_mat = MAT_SLIME; break;
     default: break;

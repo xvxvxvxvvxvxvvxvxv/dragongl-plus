@@ -106,6 +106,46 @@ void screens_title_snapshot_init(void) {
             if (open) { bestd = d; g_prev_x = x; g_prev_y = y; }
         }
     s->my_entity_id = -1;
+    /*Developer aid: DRAGONGL_GALLERY=<page> lines up 5 playable races
+     * per page (page 0 = races 0-4, ...) in front of the menu camera,
+     * to check the character models.*/
+    const char *gal = getenv("DRAGONGL_GALLERY");
+    if (gal) {
+        int page = atoi(gal);
+        s->my_x = g_prev_x;
+        s->my_y = g_prev_y;
+        /*DRAGONGL_GALLERY=d<n> : frame the n-th door of the demo floor*/
+        if (gal[0] == 'd') {
+            int want = atoi(gal + 1), n = 0;
+            for (int y = 1; y < MAP_HEIGHT - 1 && n <= want; y++)
+                for (int x = 1; x < MAP_WIDTH - 1 && n <= want; x++)
+                    if (s->map[y][x] == VOXEL_DOOR && n++ == want) { s->my_x = x; s->my_y = y; }
+            scene_set_gallery(true);
+            s->my_floor = 23;
+            return;
+        }
+        /*DRAGONGL_GALLERY=r<race> : that race alone, close up*/
+        bool single = gal[0] == 'r';
+        if (single) page = atoi(gal + 1);
+        for (int k = 0; k < (single ? 1 : 5); k++) {
+            int race = single ? page : page * 5 + k;
+            if (race >= RACE_COUNT) break;
+            Entity *e = &s->entities[k];
+            memset(e, 0, sizeof(*e));
+            e->active = true;
+            e->id = 1000 + race;
+            e->x = single ? g_prev_x : g_prev_x - 4 + k * 2;
+            e->y = g_prev_y;
+            e->hp = e->max_hp = 10;
+            e->is_player = true;
+            e->kind = KIND_PLAYER;
+            e->race_id = race;
+            e->class_id = (race * 5) % 12;
+            e->look_seed = (uint32_t)race * 2654435761u;
+            snprintf(e->username, sizeof(e->username), "%s", RACES[race].name);
+        }
+        scene_set_gallery(true);
+    }
     s->my_floor = 23;
     s->vision_radius = 40;
     s->movement_cooldown = 0.2f;
@@ -163,6 +203,7 @@ static void error_box(float x, float y, float w) {
 
 static void draw_title(void) {
     float W = ui_width(), H = ui_height();
+    if (getenv("DRAGONGL_GALLERY")) return; /*models only*/
     float a = clampf(g_app.screen_t * 1.5f, 0, 1);
     ui_rect_hgrad(0, 0, W * 0.55f, H, UIC(6, 4, 10, 200), UIC(6, 4, 10, 0));
     ui_rect_grad(0, 0, W, H * 0.34f, UIC(6, 4, 10, 215), UIC(6, 4, 10, 0));
@@ -260,12 +301,18 @@ static void draw_solo(void) {
     } else {
         float lh = 46;
         float listh = fminf(4.5f * lh, (float)g_app.solo_nheroes * lh);
-        float off = ui_scroll_begin("solo_list", x + 30, cy, w - 60, listh, (float)g_app.solo_nheroes * lh);
+        /*the scroll area (clip + bar) reaches into the right margin, so
+         * the buttons keep the same margin on both sides*/
+        float sw = w - 60 + 14;
+        float off = ui_scroll_begin("solo_list", x + 30, cy, sw, listh, (float)g_app.solo_nheroes * lh);
         for (int i = 0; i < g_app.solo_nheroes; i++) {
             float ry = cy + off + (float)i * lh;
             char label[80];
             snprintf(label, sizeof(label), "Continue as %s", g_app.solo_heroes[i]);
-            if (ui_button(label, x + 30, ry, w - 70, lh - 8, i == 0 ? BTN_PRIMARY : BTN_NORMAL)) {
+            /*full width: same margin left and right (the thin scroll bar,
+             * when there is one, overlays the right edge)*/
+            float bw = w - 60;
+            if (ui_button(label, x + 30, ry, bw, lh - 8, i == 0 ? BTN_PRIMARY : BTN_NORMAL)) {
                 audio_sfx(SFX_CLICK, 0.6f, 0);
                 solo_login(g_app.solo_heroes[i], false);
             }

@@ -676,7 +676,10 @@ static bool pipelines_create(void) {
 
 static int g_vk_loaded = -1;
 
+bool gfx_vk_cached(void) { return g_vk_loaded == 1; }
+
 bool gfx_vk_available(void) {
+    if (getenv("DRAGONGL_NO_VULKAN")) g_vk_loaded = 0; /*escape hatch for broken drivers*/
     if (g_vk_loaded < 0) g_vk_loaded = (volkInitialize() == VK_SUCCESS && glfwVulkanSupported()) ? 1 : 0;
     return g_vk_loaded == 1;
 }

@@ -79,6 +79,8 @@ float scene_cam_yaw(void);
 
 /*Explored tiles of the current floor (MAP_WIDTH x MAP_HEIGHT bytes).*/
 const uint8_t *scene_explored(void);
+/*Developer aid (DRAGONGL_GALLERY): fixed close camera on the menu.*/
+void scene_set_gallery(bool on);
 bool scene_tile_explored(int x, int y);
 /*Floating combat texts projected to the screen (for the UI).*/
 typedef struct { float sx, sy, alpha, scale; int type; const char *text; } ScreenText;

@@ -1025,7 +1025,7 @@ void hud_settings_content(float x, float y, float w, float h) {
     if (tab == 0) {
         ui_text(FONT_BODY, 17, x, cy + 12, "Renderer", COL_TEXT_DIM, ALIGN_MIDDLE);
         if (ui_button("OpenGL", x + 220, cy, 140, 30, g_settings.backend == 0 ? BTN_TAB_ACTIVE : BTN_TAB)) g_settings.backend = 0;
-        bool vk = gfx_vk_available();
+        bool vk = gfx_vk_cached(); /*probed once at start-up, before any GL context*/
         if (ui_button(vk ? "Vulkan" : "Vulkan (n/a)", x + 366, cy, 160, 30, g_settings.backend == 1 ? BTN_TAB_ACTIVE : BTN_TAB) && vk)
             g_settings.backend = 1;
         if ((g_settings.backend == 1) != (g_app.gfx == &gfx_vk_backend))
@@ -1495,7 +1495,9 @@ static void draw_chat(void) {
     int lines = open ? 16 : 8;
     float lh = 21;
     float h = (float)lines * lh + 16;
-    float y = H - h - (open ? 62 : 22);
+    /*the whole chat sits above the hotbar row (it used to run down beside
+     * it and long lines slid under the hotbar)*/
+    float y = H - h - (open ? 150 : 100);
     bool hov = ui_hover(x, y, w, h);
     static double last_activity;
     pthread_mutex_lock(&g_state_mutex);
@@ -1572,9 +1574,11 @@ static void draw_chat(void) {
         for (size_t i = 0; i < sizeof(CMDS) / sizeof(CMDS[0]) && shown < 6; i++) {
             if (strncasecmp(CMDS[i].cmd, g_app.chat, cl) != 0) continue;
             if (!first) first = CMDS[i].cmd;
-            sy -= 26;
+            sy -= 25;
             ui_layer(1);
-            ui_rrect(x + 4, sy, w - 8, 24, 4, UIC(30, 24, 34, 240));
+            /*opaque and contiguous: the chat lines must not show through*/
+            ui_rect(x + 4, sy, w - 8, 25, UIC(30, 24, 34, 255));
+            ui_rect(x + 4, sy + 24, w - 8, 1, UIC(60, 50, 64, 255));
             char sb[160];
             snprintf(sb, sizeof(sb), "^8%s^9 - %s", CMDS[i].cmd, CMDS[i].desc);
             ui_text_rich(FONT_BODY, 15, x + 14, sy + 4, sb, COL_TEXT, ALIGN_LEFT);

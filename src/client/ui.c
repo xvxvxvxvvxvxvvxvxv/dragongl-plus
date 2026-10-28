@@ -186,6 +186,7 @@ static uint32_t hash_str(const char *s) {
 }
 
 static void vlist_push(VList *l, const UIVert *v, uint32_t n) {
+    if (n == 0 || !v) return;
     if (l->n + n > l->cap) {
         uint32_t nc = l->cap ? l->cap * 2 : 65536;
         while (nc < l->n + n) nc *= 2;

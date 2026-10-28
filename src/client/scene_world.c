@@ -62,8 +62,33 @@ static int g_vis_cx0 = -1, g_vis_cy0, g_vis_cx1, g_vis_cy1;
 
 static const TileType (*M)[MAP_WIDTH];
 
+/*Village shop doors: the server turns them into walls at night (shops
+ * closed). Same placement rule as the server (update_city_doors / map.c):
+ * the client draws a CLOSED door there instead of a block of wall.*/
+static uint8_t g_shop_door[MAP_HEIGHT][MAP_WIDTH];
+static bool g_shop_doors_init;
+
+static void init_shop_doors(void) {
+    if (g_shop_doors_init) return;
+    g_shop_doors_init = true;
+    int cx = MAP_CENTER_X, cy = MAP_CENTER_Y;
+    for (int i = 0; i < 11; i++) {
+        float angle = ((float)i * (360.0f / 11.0f)) * (3.14159265358979f / 180.0f);
+        int sx = cx + (int)(cosf(angle) * 26.0f), sy = cy + (int)(sinf(angle) * 26.0f);
+        int dx = cx - sx, dy = cy - sy, tx = sx, ty = sy;
+        if (abs(dx) > abs(dy)) tx = dx > 0 ? sx + 4 : sx - 4;
+        else ty = dy > 0 ? sy + 4 : sy - 4;
+        if (tx >= 0 && ty >= 0 && tx < MAP_WIDTH && ty < MAP_HEIGHT) g_shop_door[ty][tx] = 1;
+    }
+}
+
+static inline bool closed_shop_door(int x, int y) {
+    return g_town && g_shop_door[y][x] && M[y][x] == VOXEL_WALL;
+}
+
 static inline TileType T(int x, int y) {
     if (x < 0 || y < 0 || x >= MAP_WIDTH || y >= MAP_HEIGHT) return VOXEL_ROCK;
+    if (closed_shop_door(x, y)) return VOXEL_DOOR; /*neighbours keep their faces*/
     return M[y][x];
 }
 
@@ -294,9 +319,15 @@ static void build_mushrooms(Chunk *c, int x, int y) {
     add_emit(c, EMIT_SPORE, (float)x, 0.4f, (float)y, RGBA8(120, 255, 190, 255), hash1f(h) * 10);
 }
 
-static void build_door(Chunk *c, int x, int y) {
-    /*Passage axis: walls left/right => people walk north-south.*/
-    bool ns = tile_is_block(T(x - 1, y)) && tile_is_block(T(x + 1, y));
+static void build_door(Chunk *c, int x, int y, bool closed) {
+    /*Passage axis from BOTH clues: open tiles in front/behind and solid
+     * tiles beside. Looking only for walls on the left AND right failed in
+     * round rooms and at corridor corners (the door came out turned 90 deg).*/
+    int ns_score = (open_tile(T(x, y - 1)) ? 1 : 0) + (open_tile(T(x, y + 1)) ? 1 : 0) +
+                   (tile_is_block(T(x - 1, y)) ? 1 : 0) + (tile_is_block(T(x + 1, y)) ? 1 : 0);
+    int ew_score = (open_tile(T(x - 1, y)) ? 1 : 0) + (open_tile(T(x + 1, y)) ? 1 : 0) +
+                   (tile_is_block(T(x, y - 1)) ? 1 : 0) + (tile_is_block(T(x, y + 1)) ? 1 : 0);
+    bool ns = ns_score >= ew_score;
     Mat frame = matc(MAT_BRICK, RGBA8(210, 200, 190, 255));
     Mat wood = matc(MAT_DOOR, RGBA8(255, 255, 255, 255));
     float hh = 1.25f;
@@ -304,8 +335,8 @@ static void build_door(Chunk *c, int x, int y) {
         mesh_box(&c->opaque, v3m((float)x - 0.44f, hh * 0.5f, (float)y), v3m(0.07f, hh * 0.5f, 0.14f), m3identity(), &frame);
         mesh_box(&c->opaque, v3m((float)x + 0.44f, hh * 0.5f, (float)y), v3m(0.07f, hh * 0.5f, 0.14f), m3identity(), &frame);
         mesh_box(&c->opaque, v3m((float)x, hh + 0.08f, (float)y), v3m(0.52f, 0.08f, 0.15f), m3identity(), &frame);
-        /*leaf swung open against the left post*/
-        m3 r = m3roty(1.25f);
+        /*leaf swung open against the left post (or shut across the frame)*/
+        m3 r = m3roty(closed ? 0.0f : 1.25f);
         v3 hinge = v3m((float)x - 0.36f, 0, (float)y - 0.05f);
         v3 cen = v3add(hinge, m3apply(r, v3m(0.36f, hh * 0.5f - 0.02f, 0)));
         mesh_box(&c->opaque, cen, v3m(0.36f, hh * 0.5f - 0.04f, 0.035f), r, &wood);
@@ -313,7 +344,7 @@ static void build_door(Chunk *c, int x, int y) {
         mesh_box(&c->opaque, v3m((float)x, hh * 0.5f, (float)y - 0.44f), v3m(0.14f, hh * 0.5f, 0.07f), m3identity(), &frame);
         mesh_box(&c->opaque, v3m((float)x, hh * 0.5f, (float)y + 0.44f), v3m(0.14f, hh * 0.5f, 0.07f), m3identity(), &frame);
         mesh_box(&c->opaque, v3m((float)x, hh + 0.08f, (float)y), v3m(0.15f, 0.08f, 0.52f), m3identity(), &frame);
-        m3 r = m3roty(-1.25f + MX_PI * 0.5f);
+        m3 r = m3roty(closed ? -MX_PI * 0.5f : -1.25f + MX_PI * 0.5f); /*roty(-pi/2) maps +X to +Z*/
         v3 hinge = v3m((float)x - 0.05f, 0, (float)y - 0.36f);
         v3 cen = v3add(hinge, m3apply(r, v3m(0.36f, hh * 0.5f - 0.02f, 0)));
         mesh_box(&c->opaque, cen, v3m(0.36f, hh * 0.5f - 0.04f, 0.035f), r, &wood);
@@ -448,6 +479,11 @@ static void build_chunk(int cx, int cy) {
     for (int y = y0; y < y0 + CH && y < MAP_HEIGHT; y++)
         for (int x = x0; x < x0 + CH && x < MAP_WIDTH; x++) {
             TileType t = M[y][x];
+            if (closed_shop_door(x, y)) {
+                build_floor(&c->opaque, x, y, VOXEL_COBBLE, 0.0f, floor_material(VOXEL_COBBLE));
+                build_door(c, x, y, true);
+                continue;
+            }
             if (tile_is_block(t)) {
                 build_block(c, x, y, t);
                 continue;
@@ -461,7 +497,7 @@ static void build_chunk(int cx, int cy) {
                 build_floor(&c->opaque, x, y, t, 0.0f, floor_material(t));
                 if (is_crystal(t)) build_crystal(c, x, y, t);
                 else if (t == VOXEL_MUSHROOM_GLOW) build_mushrooms(c, x, y);
-                else if (t == VOXEL_DOOR) build_door(c, x, y);
+                else if (t == VOXEL_DOOR) build_door(c, x, y, false);
                 else if (t == VOXEL_GRASS) build_grass_tufts(c, x, y);
                 else if (t == VOXEL_TRAP) add_emit(c, EMIT_TRAP, (float)x, 0.02f, (float)y, RGBA8(255, 60, 40, 255), 0);
                 if (g_town && t == VOXEL_COBBLE && (hash2i(x * 13, y * 29) % 100) < 3) {
@@ -481,6 +517,7 @@ static void build_chunk(int cx, int cy) {
 
 void world_reset(bool town) {
     g_town = town;
+    init_shop_doors();
     for (int y = 0; y < NCY; y++)
         for (int x = 0; x < NCX; x++) {
             g_chunks[y][x].built = false;

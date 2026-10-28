@@ -238,15 +238,17 @@ static bool is_hostile(const Entity *e) {
     return e && !e->is_player && !e->is_merchant && !e->is_tombstone && e->kind != KIND_CHEST && e->kind != KIND_GOLD;
 }
 
-static float step_interval(void) {
+/*Same rule as the server: diagonal steps cost sqrt(2) times longer.*/
+static float step_interval(int dx, int dy) {
     float cd = g_app.snap->movement_cooldown;
     if (cd < 0.21f) cd = 0.21f; /*server rate limit: 200 ms*/
+    if (dx != 0 && dy != 0) cd *= 1.4142f;
     return cd;
 }
 
 static void send_step(int dx, int dy) {
     client_send_move(dx, dy);
-    g_app.next_step_time = g_app.time + step_interval();
+    g_app.next_step_time = g_app.time + step_interval(dx, dy);
     if (g_app.time - g_app.last_step_sound > 0.25) {
         audio_sfx_pitch(SFX_STEP, 0.35f, 0, 0.9f + (float)(rand() % 20) / 100.0f);
         g_app.last_step_sound = g_app.time;

@@ -3304,8 +3304,18 @@ int main(int argc, char **argv) {
             int old_floor = clients[i].floor_id;
 
             long long now_ms = get_time_ms();
-            if (now_ms - clients[i].last_action_ms < 200) {
-                continue; //Rate limit: max 5 actions per second
+            /*Step cost: the movement cooldown (heavier when encumbered, it
+             * used to be enforced by the client only) and x1.41 for a
+             * diagonal step, which covers sqrt(2) tiles - otherwise walking
+             * diagonally was the fastest way to travel. 40 ms of tolerance
+             * absorb network jitter between the client's evenly timed steps.*/
+            {
+              bool diag = m.dx != 0 && m.dy != 0;
+              long long need = (long long)(get_movement_cooldown(&clients[i]) * 1000.0f * (diag ? 1.4142f : 1.0f));
+              if (need < 200) need = 200;
+              if (now_ms - clients[i].last_action_ms < need - 40) {
+                continue;
+              }
             }
             clients[i].last_action_ms = now_ms;
 
