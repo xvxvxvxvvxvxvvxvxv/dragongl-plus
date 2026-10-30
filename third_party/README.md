@@ -12,6 +12,7 @@ development package. Every component keeps its own license file.
 | `stb/`      | stb_truetype, stb_image_write| Public domain / MIT      | client (UI, shots) |
 | `wepoll/`   | wepoll (epoll for Windows)   | BSD-2-Clause             | server (Windows)   |
 | `fonts/`    | Cinzel, Alegreya Sans        | SIL Open Font License 1.1| client (UI)        |
+| `mingw-w64/`| notices of the MinGW-w64 C runtime and winpthreads (no code: the toolchain links them statically into the Windows builds) | ZPL-2.1, MIT, BSD | Windows packages |
 
 The fonts are embedded in the client binary at build time
 (`tools/embed.cmake`); their OFL license texts ship in `fonts/`.

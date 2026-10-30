@@ -94,6 +94,8 @@ EOF
     echo "$OUT/$NAME.tar.gz"
 else
     x86_64-w64-mingw32-strip "$STAGE/DragonGL-Plus.exe" "$STAGE/dragongl_server.exe" 2>/dev/null || true
+    # the C runtime and winpthreads are linked statically: ship their notices
+    cp "$T/mingw-w64/COPYING.MinGW-w64-runtime.txt" "$STAGE/licenses/MinGW-w64-runtime.txt"
     # Windows users expect CRLF in text files opened with Notepad
     for f in "$STAGE/README-PLAY.txt" "$STAGE/LICENSE.txt"; do
         sed 's/$/\r/' "$f" > "$f.tmp" && mv "$f.tmp" "$f"

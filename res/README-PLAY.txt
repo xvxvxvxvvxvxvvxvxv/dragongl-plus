@@ -75,4 +75,13 @@ COMANDI: vedi la sezione inglese qui sopra, oppure premi F1 / H nel gioco.
 =============================================================================
   See the licenses/ folder: GLFW (zlib), volk (MIT), Vulkan headers
   (Apache-2.0/MIT), miniaudio (MIT-0), stb (public domain), wepoll
-  (BSD-2), cJSON (MIT), Cinzel and Alegreya Sans fonts (SIL OFL 1.1).
+  (BSD-2), cJSON (MIT), Cinzel and Alegreya Sans fonts (SIL OFL 1.1);
+  Windows build only: MinGW-w64 runtime and winpthreads (ZPL-2.1/MIT/BSD).
+
+=============================================================================
+ LICENSE
+=============================================================================
+  DragonGL+ is free software: you can redistribute it and/or modify it
+  under the terms of the GNU General Public License, version 3 or (at your
+  option) any later version - see LICENSE.txt. It comes with ABSOLUTELY NO
+  WARRANTY. Source code: https://github.com/xvxvxvxvvxvxvvxvxv/dragongl-plus

@@ -235,7 +235,7 @@ static void draw_title(void) {
     char foot[160];
     snprintf(foot, sizeof(foot), "DragonGL+ %s  |  %s  |  F12: screenshot", DRAGONGL_VERSION_STR, g_app.gfx->device_name());
     ui_text(FONT_BODY, 14, W - 20, H - 28, foot, COL_TEXT_FAINT, ALIGN_RIGHT);
-    ui_text(FONT_BODY, 14, 20, H - 28, "GPL-3.0  -  (C) 2026 Nicola Taibi", COL_TEXT_FAINT, ALIGN_LEFT);
+    ui_text(FONT_BODY, 14, 20, H - 28, "(C) 2026 Nicola Taibi  -  GPL-3.0+, NO WARRANTY: see Credits", COL_TEXT_FAINT, ALIGN_LEFT);
 }
 
 /* ------------------------------------------------------------------ */
@@ -624,15 +624,19 @@ static void draw_credits(void) {
     }
     const char *text =
         "^8Dragon GL^0 - The Long Descent into the Dragon's Maw\n"
-        "Created by ^8Nicola Taibi^0. Licensed under the GNU GPL v3 or later.\n\n"
+        "Created by ^8Nicola Taibi^0 - github.com/nicolataibi/dragongl\n\n"
         "^8DragonGL+^0\n"
         "New graphical client: menus, character creation, interface and HUD, procedural textures, "
         "animated creatures, dynamic lighting, an original procedurally synthesized soundtrack and "
         "sound effects, click-to-move, portable builds for Linux and Windows.\n\n"
-        "^8Third-party components^0\n"
+        "^8License^0\n"
+        "Free software under the GNU General Public License v3 or later, with ABSOLUTELY NO "
+        "WARRANTY. Full text: LICENSE.txt next to the game, or gnu.org/licenses/gpl-3.0. "
+        "Source code: github.com/xvxvxvxvvxvxvvxvxv/dragongl-plus\n\n"
+        "^8Third-party components^0 (licenses in the licenses folder)\n"
         "GLFW (zlib) - volk & Vulkan headers (MIT/Apache-2.0) - miniaudio (public domain) - "
-        "stb_truetype / stb_image_write (public domain) - wepoll (BSD-2) - cJSON (MIT).\n"
-        "Fonts: Cinzel and Alegreya Sans (SIL Open Font License 1.1).\n\n"
+        "stb_truetype / stb_image_write (public domain) - wepoll (BSD-2) - cJSON (MIT) - "
+        "MinGW-w64 runtime (Windows). Fonts: Cinzel and Alegreya Sans (SIL OFL 1.1).\n\n"
         "^8Music^0\n"
         "Every note is synthesized live by the game: \"The Long Descent\", \"Hearth of the Maw\", "
         "\"Echoes Below\", \"The Abyssal Choir\", \"Guardian of the Seal\".\n\n"
