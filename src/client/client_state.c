@@ -29,6 +29,7 @@
 
 atomic_int g_net_status = NET_IDLE;
 char g_net_error[160];
+atomic_bool g_net_rx_any;
 
 int g_server_sock = -1;
 int g_my_entity_id = -1;
@@ -40,6 +41,13 @@ int g_str = 10, g_dex = 10, g_con = 10, g_intel = 10, g_wis = 10, g_cha = 10;
 int g_equipped_mask = 0;
 int g_my_level = 1, g_my_xp = 0, g_my_floor = 0;
 int g_my_xp_next = 300, g_stat_points = 0, g_max_floor = 0;
+int g_proto_version = PROTOCOL_VERSION;
+
+MsgHeader client_hdr(MsgType type, int length) {
+    MsgHeader h = msg_hdr(type, length);
+    h.version = (uint16_t)g_proto_version;
+    return h;
+}
 uint64_t g_my_gold = 0;
 int g_my_ac = 10;
 int g_vision_radius = 4;
@@ -68,6 +76,7 @@ uint32_t g_log_total;
 
 ClientEvent g_evq[EVQ_CAP];
 uint32_t g_evq_head;
+uint32_t g_evq_session_start;
 
 pthread_mutex_t g_state_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t g_net_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -128,7 +137,7 @@ void frame_snapshot_acquire(FrameSnapshot *snap) {
 }
 
 void client_send_move(int dx, int dy) {
-    MsgHeader hdr = msg_hdr(MSG_MOVE, (int)sizeof(MsgMove));
+    MsgHeader hdr = client_hdr(MSG_MOVE, (int)sizeof(MsgMove));
     MsgMove m;
     if (g_my_entity_id == -1 || g_server_sock < 0) return;
     memset(&m, 0, sizeof(m));
@@ -142,7 +151,7 @@ void client_send_move(int dx, int dy) {
 }
 
 void client_send_text_cmd(const char *cmd) {
-    MsgHeader hdr = msg_hdr(MSG_TEXT_CMD, (int)sizeof(MsgTextCmd));
+    MsgHeader hdr = client_hdr(MSG_TEXT_CMD, (int)sizeof(MsgTextCmd));
     MsgTextCmd m;
     if (g_server_sock < 0) return;
     memset(&m, 0, sizeof(m));
@@ -190,6 +199,7 @@ void client_log_add(const char *text) { client_log_add_color(text, log_color_for
 
 void client_state_reset(void) {
     pthread_mutex_lock(&g_state_mutex);
+    g_evq_session_start = g_evq_head; /*events of the new session start here*/
     g_my_entity_id = -1;
     memset(g_entities, 0, sizeof(g_entities));
     for (int y = 0; y < MAP_HEIGHT; y++)

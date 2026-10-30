@@ -27,6 +27,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 #include <pthread.h>
 #include "client_state.h"
@@ -35,10 +36,16 @@
 #include "protocol.h"
 #include "net.h"
 
+/*Size of MsgState on the wire: classic servers end it at the v4 fields.*/
+static int wire_state_size(void) {
+    return client_classic() ? (int)offsetof(MsgState, kind) : (int)sizeof(MsgState);
+}
+
 static bool valid_msg(MsgType type, int length) {
+    if (client_classic() && type >= MSG_INVENTORY) return false; /*v4-only messages*/
     switch (type) {
     case MSG_WELCOME:          return length == sizeof(MsgWelcome);
-    case MSG_STATE:            return length == sizeof(MsgState);
+    case MSG_STATE:            return length == wire_state_size();
     case MSG_MAP_CHUNK:        return (size_t)length >= sizeof(MsgMapChunk);
     case MSG_TEXT_CMD:         return length == sizeof(MsgTextCmd);
     case MSG_TEXT:             return length == sizeof(MsgText);
@@ -70,6 +77,74 @@ static void push_simple(int kind, int value, int x, int y) {
     e.x = x;
     e.y = y;
     evq_push(&e);
+}
+
+/* ------------------------------------------------------------------ */
+/* Classic servers (original Dragon GL, protocol v3)                    */
+/* ------------------------------------------------------------------ */
+
+static int xp_threshold(int level) {
+    static const int T[20] = {0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000,
+                              85000, 100000, 120000, 140000, 165000, 195000, 225000, 265000, 305000, 355000};
+    if (level < 1) return 0;
+    if (level > 20) return 355000;
+    return T[level - 1];
+}
+
+/*A classic MsgState ends before the v4 fields: rebuild what the client
+ * can (caller holds g_state_mutex).*/
+static void classic_fill_state(MsgState *s) {
+    if (s->entity_id == g_my_entity_id) {
+        s->xp_next = xp_threshold(s->level + 1);
+        s->race_id = g_race_id;   /*from the welcome message*/
+        s->class_id = g_class_id;
+        s->max_floor = s->floor_id > g_max_floor ? s->floor_id : g_max_floor;
+        return;
+    }
+    if (s->is_player || s->is_tombstone) return;
+    if (s->is_merchant) {
+        if (!s->username[0]) copy_str(s->username, "Merchant", sizeof(s->username));
+        return;
+    }
+    /*No identity is sent for creatures. Loot (treasure chests, gold
+     * piles, remains) uses fixed hit points: 9999 or 1.*/
+    if (s->max_hp == 9999 || s->max_hp == 1) {
+        s->kind = KIND_CHEST;
+        if (!s->username[0]) copy_str(s->username, "Treasure", sizeof(s->username));
+        return;
+    }
+    s->kind = KIND_HUMANOID;
+    s->archetype = 0;
+    if (!s->username[0]) copy_str(s->username, "Creature", sizeof(s->username));
+}
+
+static void push_gev(int type, int src, int dst, int value, int x, int y) {
+    ClientEvent e;
+    memset(&e, 0, sizeof(e));
+    e.kind = CEV_SERVER;
+    e.ev.type = type;
+    e.ev.src_id = src;
+    e.ev.dst_id = dst;
+    e.ev.value = value;
+    e.ev.x = (int16_t)x;
+    e.ev.y = (int16_t)y;
+    e.value = value;
+    e.x = x;
+    e.y = y;
+    evq_push(&e);
+}
+
+/*Classic servers send no combat events: derive them from HP changes so
+ * damage numbers, hit flashes and death animations still play.*/
+static void classic_hp_change(Entity *e, int new_hp) {
+    if (e->is_player || e->is_merchant || e->is_tombstone || e->kind == KIND_CHEST) return;
+    if (new_hp < e->hp && new_hp > 0)
+        push_gev(GEV_HURT, 0, e->id, e->hp - new_hp, e->x, e->y);
+    if (new_hp <= 0 && e->hp > 0 && !e->killed_at_ms) {
+        bool near_me = abs(e->x - g_my_x) <= 1 && abs(e->y - g_my_y) <= 1;
+        push_gev(GEV_KILL, near_me ? g_my_entity_id : 0, e->id, 0, e->x, e->y);
+        e->killed_at_ms = plat_time_ms();
+    }
 }
 
 static void clear_floor_locked(void) {
@@ -178,11 +253,11 @@ void *net_thread_loop(void *arg) {
             fail(NET_DISCONNECTED, "Connection lost.");
             break;
         }
-        if (hdr.version != PROTOCOL_VERSION) {
+        if (hdr.version != g_proto_version) {
             char why[160];
             snprintf(why, sizeof(why),
-                     "Protocol mismatch: server v%u, client v%u. Update both to the same release.",
-                     hdr.version, PROTOCOL_VERSION);
+                     "Protocol mismatch: server v%u, client v%d. Update both to the same release.",
+                     hdr.version, g_proto_version);
             fail(NET_FAILED, why);
             break;
         }
@@ -190,6 +265,7 @@ void *net_thread_loop(void *arg) {
             fail(NET_FAILED, "Protocol error (bad message) - disconnected.");
             break;
         }
+        atomic_store(&g_net_rx_any, true);
 
         switch (hdr.type) {
         case MSG_WELCOME: {
@@ -220,9 +296,11 @@ void *net_thread_loop(void *arg) {
             goto done;
         }
         case MSG_STATE: {
-            if (net_receive_all(g_server_sock, &st, sizeof(st)) <= 0) goto io_error;
+            memset(&st, 0, sizeof(st));
+            if (net_receive_all(g_server_sock, &st, wire_state_size()) <= 0) goto io_error;
             st.username[sizeof(st.username) - 1] = '\0';
             pthread_mutex_lock(&g_state_mutex);
+            if (client_classic()) classic_fill_state(&st);
             if (st.entity_id == g_my_entity_id) {
                 if (last_floor != -1 && last_floor != st.floor_id) {
                     clear_floor_locked();
@@ -236,6 +314,7 @@ void *net_thread_loop(void *arg) {
                     if (g_entities[i].active && g_entities[i].id == st.entity_id) { slot = i; break; }
                     if (free_slot < 0 && !g_entities[i].active) free_slot = i;
                 }
+                if (st.hp <= 0 && client_classic() && slot >= 0) classic_hp_change(&g_entities[slot], st.hp);
                 if (st.hp <= 0) {
                     /*removal; a creature just killed stays for its death
                      * animation (killed_at_ms, dropped by the snapshot)*/
@@ -270,6 +349,7 @@ void *net_thread_loop(void *arg) {
             for (int k = 0; k < count; k++)
                 for (int i = 0; i < CLIENT_MAX_ENTITIES; i++)
                     if (g_entities[i].active && g_entities[i].id == recs[k].entity_id) {
+                        if (client_classic()) classic_hp_change(&g_entities[i], recs[k].hp);
                         g_entities[i].x = recs[k].x;
                         g_entities[i].y = recs[k].y;
                         g_entities[i].hp = recs[k].hp;
@@ -337,6 +417,9 @@ void *net_thread_loop(void *arg) {
             client_log_add(t.text);
             pthread_mutex_lock(&g_state_mutex);
             push_simple(CEV_TEXT, (int)(g_log_total - 1), g_my_x, g_my_y);
+            /*classic servers announce the hero's death only as text*/
+            if (client_classic() && strstr(t.text, "[SYSTEM] You died"))
+                push_gev(GEV_PLAYER_DIED, 0, g_my_entity_id, 0, g_my_x, g_my_y);
             pthread_mutex_unlock(&g_state_mutex);
             break;
         }

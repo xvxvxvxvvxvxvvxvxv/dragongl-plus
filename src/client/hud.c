@@ -270,7 +270,12 @@ static void handle_event(const ClientEvent *e) {
     case CEV_WELCOME: {
         char t[96];
         snprintf(t, sizeof(t), e->value ? "Welcome, %s" : "Welcome back, %s", g_my_name);
-        show_banner(t, e->value ? "Your adventure begins in the Dragon's Maw Village" : "The Maw awaits your return");
+        show_banner(t, client_classic() ? "Classic Dragon GL server - compatibility mode"
+                                        : (e->value ? "Your adventure begins in the Dragon's Maw Village" : "The Maw awaits your return"));
+        if (client_classic())
+            client_log_add_color("[SYSTEM] Connected to a classic Dragon GL server: inventory, shops and spells work through "
+                                 "chat commands (type 'help'); creatures are shown without names.",
+                                 UIC(255, 200, 120, 255));
         tip(0, "Move with WASD (or click the ground). Hold the right mouse button to turn the camera.");
         break;
     }
@@ -305,6 +310,15 @@ void hud_handle_events(void) {
 /* ------------------------------------------------------------------ */
 
 void hud_toggle(uint32_t w) {
+    /*Classic servers send no inventory/spellbook data: ask for the text
+     * listing instead (it appears in the chat).*/
+    if (client_classic() && (w == WIN_INVENTORY || w == WIN_SPELLS)) {
+        app_send(w == WIN_INVENTORY ? "inventory" : "spells");
+        ui_toast(w == WIN_INVENTORY ? "Classic server: inventory listed in the chat ('use <n>', 'wear <n>', 'drop <n>')."
+                                    : "Classic server: spells listed in the chat ('cast <name>').",
+                 COL_TEXT);
+        return;
+    }
     if (g_app.windows & w) {
         g_app.windows &= ~w;
         audio_sfx(SFX_CLOSE, 0.4f, 0);
@@ -627,6 +641,10 @@ void hud_cast_hotbar(int i) {
 }
 
 void hud_use_belt(int i) {
+    if (client_classic()) {
+        ui_toast("Classic server: use potions with 'use <n>' in the chat (see 'inventory').", COL_TEXT_DIM);
+        return;
+    }
     const InvItem *it = inv_find(INV_BELT, i);
     if (!it) {
         ui_toast("Empty belt slot: right-click a potion and choose 'Put on belt'.", COL_TEXT_DIM);
@@ -1431,7 +1449,10 @@ static void draw_target_frame(void) {
     char buf[96];
     snprintf(buf, sizeof(buf), "%s", l->name);
     ui_text(FONT_BOLD, 17, x + 14, y + 7, buf, l->is_boss ? UIC(255, 140, 90, 255) : COL_TEXT, ALIGN_LEFT);
-    snprintf(buf, sizeof(buf), "Lv %d  %s", l->level, (l->archetype >= 0 && l->archetype < 10) ? arch[l->archetype] : "");
+    if (l->level > 0)
+        snprintf(buf, sizeof(buf), "Lv %d  %s", l->level, (l->archetype >= 0 && l->archetype < 10) ? arch[l->archetype] : "");
+    else
+        buf[0] = '\0'; /*classic servers send no level or role*/
     ui_text(FONT_BODY, 14, x + w - 14, y + 9, buf, COL_TEXT_DIM, ALIGN_RIGHT);
     snprintf(buf, sizeof(buf), "%d / %d", l->hp, l->max_hp);
     ui_bar(x + 14, y + 32, w - 28, 16, l->hp_frac, UIC(230, 60, 50, 255), UIC(120, 20, 20, 255), buf);

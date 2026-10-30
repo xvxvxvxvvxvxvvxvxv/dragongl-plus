@@ -164,8 +164,10 @@ void app_start_session(const LoginInfo *li, bool solo) {
             return;
         }
         g_app.login.retry_ms = 90000; /*first launch generates 100 floors*/
+        g_app.login.no_classic = true;
     } else {
         g_app.login.retry_ms = 0;
+        g_app.login.no_classic = false;
     }
     session_start(&g_app.login);
     app_set_screen(SCR_CONNECTING);
@@ -564,7 +566,11 @@ static void connection_watch(void) {
             g_app.windows = 0;
             g_app.dead = false;
             g_app.last_floor_seen = -1;
-            g_app.ev_cursor_scene = g_app.ev_cursor_audio = g_app.ev_cursor_hud = g_evq_head;
+            /*replay what arrived while connecting (welcome banner, first
+             * messages) - it used to be skipped*/
+            pthread_mutex_lock(&g_state_mutex);
+            g_app.ev_cursor_scene = g_app.ev_cursor_audio = g_app.ev_cursor_hud = g_evq_session_start;
+            pthread_mutex_unlock(&g_state_mutex);
             if (!g_app.solo) {
                 snprintf(g_settings.last_host, sizeof(g_settings.last_host), "%s", g_app.login.host);
                 g_settings.last_port = g_app.login.port;

@@ -41,6 +41,9 @@ typedef struct {
     /*Keep retrying the connection for this long (ms): the solo server
      * may still be generating its world when the client first tries.*/
     int retry_ms;
+    /*Never fall back to the classic (original Dragon GL) protocol: set
+     * for the bundled solo server, which always speaks the current one.*/
+    bool no_classic;
 } LoginInfo;
 
 bool session_start(const LoginInfo *info);

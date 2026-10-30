@@ -52,11 +52,13 @@ static void set_status(const char *s) {
     pthread_mutex_unlock(&g_state_mutex);
 }
 
-static void *session_thread(void *arg) {
-    (void)arg;
+/*Connect (retrying until the deadline: the solo server may still be
+ * generating its world) and send the login with the current protocol
+ * version. Returns the socket, or -1 with g_net_error set.*/
+static int connect_and_login(long long deadline) {
     char err[160] = "";
     int sock = -1;
-    long long deadline = plat_time_ms() + (s_info.retry_ms > 0 ? s_info.retry_ms : 0);
+    atomic_store(&g_net_rx_any, false);
     atomic_store(&g_net_status, NET_CONNECTING);
     set_status("Connecting...");
     for (;;) {
@@ -70,13 +72,13 @@ static void *session_thread(void *arg) {
         copy_str(g_net_error, err, sizeof(g_net_error));
         pthread_mutex_unlock(&g_state_mutex);
         atomic_store(&g_net_status, NET_FAILED);
-        return NULL;
+        return -1;
     }
     g_server_sock = sock;
     atomic_store(&g_net_status, NET_LOGGING_IN);
-    set_status("Authenticating...");
+    set_status(client_classic() ? "Authenticating (classic server)..." : "Authenticating...");
 
-    MsgHeader hdr = msg_hdr(MSG_LOGIN, (int)sizeof(MsgLogin));
+    MsgHeader hdr = client_hdr(MSG_LOGIN, (int)sizeof(MsgLogin));
     MsgLogin m;
     memset(&m, 0, sizeof(m));
     copy_str(m.username, s_info.user, sizeof(m.username));
@@ -100,10 +102,37 @@ static void *session_thread(void *arg) {
         copy_str(g_net_error, "Could not send the login.", sizeof(g_net_error));
         pthread_mutex_unlock(&g_state_mutex);
         atomic_store(&g_net_status, NET_FAILED);
-        return NULL;
+        return -1;
     }
     copy_str(g_my_name, s_info.user, sizeof(g_my_name));
+    return sock;
+}
+
+static void *session_thread(void *arg) {
+    (void)arg;
+    long long deadline = plat_time_ms() + (s_info.retry_ms > 0 ? s_info.retry_ms : 0);
+    g_proto_version = PROTOCOL_VERSION;
+    if (connect_and_login(deadline) < 0) return NULL;
     net_thread_loop(NULL);
+    /*An original Dragon GL server drops a connection whose header carries
+     * another protocol version without answering at all. Closed before
+     * the first byte arrived => try once more speaking its protocol.*/
+    if (!atomic_load(&s_stop) && !g_net_rx_any && atomic_load(&g_net_status) == NET_DISCONNECTED && !s_info.no_classic) {
+        pthread_mutex_lock(&g_net_mutex);
+        net_close(g_server_sock);
+        g_server_sock = -1;
+        pthread_mutex_unlock(&g_net_mutex);
+        g_proto_version = PROTO_CLASSIC;
+        if (connect_and_login(plat_time_ms()) < 0) return NULL;
+        net_thread_loop(NULL);
+        if (!g_net_rx_any && atomic_load(&g_net_status) == NET_DISCONNECTED) {
+            pthread_mutex_lock(&g_state_mutex);
+            copy_str(g_net_error, "The server refused the connection (incompatible version or server full).",
+                     sizeof(g_net_error));
+            pthread_mutex_unlock(&g_state_mutex);
+            atomic_store(&g_net_status, NET_FAILED);
+        }
+    }
     return NULL;
 }
 

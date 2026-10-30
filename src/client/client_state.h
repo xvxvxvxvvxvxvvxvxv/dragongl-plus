@@ -73,6 +73,7 @@ typedef enum {
 
 extern atomic_int g_net_status;
 extern char g_net_error[160];
+extern atomic_bool g_net_rx_any; /*at least one message arrived on this connection*/
 
 extern int g_server_sock;
 extern int g_my_entity_id;
@@ -84,6 +85,14 @@ extern int g_str, g_dex, g_con, g_intel, g_wis, g_cha;
 extern int g_equipped_mask;
 extern int g_my_level, g_my_xp, g_my_floor;
 extern int g_my_xp_next, g_stat_points, g_max_floor;
+/*Wire protocol spoken with the current server: PROTOCOL_VERSION, or 3
+ * when connected to an original (classic) Dragon GL server. In classic
+ * mode the server sends no inventory/shop/spellbook/game-event messages
+ * and no creature identity: the client fills in what it can.*/
+extern int g_proto_version;
+#define PROTO_CLASSIC 3
+static inline bool client_classic(void) { return g_proto_version < PROTOCOL_VERSION; }
+MsgHeader client_hdr(MsgType type, int length);
 extern uint64_t g_my_gold;
 extern int g_my_ac;
 extern int g_vision_radius;
@@ -143,6 +152,7 @@ typedef struct {
 } ClientEvent;
 #define EVQ_CAP 256
 extern ClientEvent g_evq[EVQ_CAP];
+extern uint32_t g_evq_session_start;
 extern uint32_t g_evq_head; /*monotonic write index*/
 void evq_push(const ClientEvent *e); /*caller holds g_state_mutex*/
 /*Copy events in [*cursor, head) into out (max n); returns count.*/

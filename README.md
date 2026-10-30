@@ -87,6 +87,12 @@ A graphics driver with **OpenGL 3.3** or **Vulkan 1.3** is enough.
   (saves in `%APPDATA%\DragonGL\solo` or `~/.config/dragongl/solo`).
 * **Join a Server** — play with friends: one of you runs
   `dragongl_server -P 8080 -p <server password>`.
+* **Classic servers** — the client also joins servers running the original
+  Dragon GL (protocol v3): it detects them automatically and switches to a
+  compatibility mode. Movement, map, combat and chat work; inventory, shops and
+  spells are used through chat commands (`inventory`, `use <n>`, `buy <n>`,
+  `cast <spell>`...) and creatures are drawn without names or species, because
+  the original server does not send them.
 
 ## ✨ What's new
 
