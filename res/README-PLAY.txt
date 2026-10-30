@@ -38,6 +38,7 @@ CONTROLS (all of them are also listed in game: press F1 or H)
   Enter             chat & commands                      Tab          next target
   R rest   T search   L look   N show all names          Esc          menu
   F12               screenshot
+  Windows can be moved by dragging their title bar (double-click: put back).
 
 GRAPHICS
   The game picks OpenGL by default; Vulkan can be selected in

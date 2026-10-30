@@ -18,6 +18,7 @@
  */
 
 #include "settings.h"
+#include "ui.h"
 #include "platform.h"
 #include "net.h"
 #include <stdio.h>
@@ -93,6 +94,12 @@ void settings_load(void) {
 #undef INT
 #undef BOOL
 #undef FLOAT
+        unsigned wid;
+        float wdx, wdy;
+        if (sscanf(k, "window_%x", &wid) == 1 && sscanf(v, "%f,%f", &wdx, &wdy) == 2) {
+            ui_window_restore(wid, wdx, wdy); /*a window the player moved*/
+            continue;
+        }
         if (strcmp(k, "last_host") == 0) copy_str(g_settings.last_host, v, sizeof(g_settings.last_host));
         else if (strcmp(k, "last_user") == 0) copy_str(g_settings.last_user, v, sizeof(g_settings.last_user));
         else if (strcmp(k, "solo_user") == 0) copy_str(g_settings.solo_user, v, sizeof(g_settings.solo_user));
@@ -120,5 +127,8 @@ void settings_save(void) {
     fprintf(f, "last_host=%s\n", g_settings.last_host);
     fprintf(f, "last_user=%s\n", g_settings.last_user);
     fprintf(f, "solo_user=%s\n", g_settings.solo_user);
+    uint32_t wid;
+    float wdx, wdy;
+    for (int i = 0; ui_window_saved(i, &wid, &wdx, &wdy); i++) fprintf(f, "window_%08x=%.0f,%.0f\n", wid, (double)wdx, (double)wdy);
     fclose(f);
 }

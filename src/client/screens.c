@@ -284,7 +284,7 @@ static void draw_solo(void) {
         scanned = g_app.time;
     }
     float w = 640, h = 560, x = (W - w) * 0.5f, y = (H - h) * 0.5f;
-    if (!ui_window("Play Solo", x, y, w, h, true) || ui_input()->keys[UIK_ESCAPE]) {
+    if (!ui_window("Play Solo", &x, &y, w, h, UIW_CLOSE) || ui_input()->keys[UIK_ESCAPE]) {
         app_set_screen(SCR_TITLE);
         return;
     }
@@ -357,7 +357,7 @@ static void draw_join(void) {
         init = true;
     }
     float w = 640, h = 560, x = (W - w) * 0.5f, y = (H - h) * 0.5f;
-    if (!ui_window("Join a Server", x, y, w, h, true) || ui_input()->keys[UIK_ESCAPE]) {
+    if (!ui_window("Join a Server", &x, &y, w, h, UIW_CLOSE) || ui_input()->keys[UIK_ESCAPE]) {
         app_set_screen(SCR_TITLE);
         return;
     }
@@ -589,7 +589,7 @@ static void draw_connecting(void) {
 static void draw_settings_screen(void) {
     float W = ui_width(), H = ui_height();
     float w = 900, h = 720, x = (W - w) * 0.5f, y = (H - h) * 0.5f;
-    if (!ui_window("Settings", x, y, w, h, true) || ui_input()->keys[UIK_ESCAPE]) {
+    if (!ui_window("Settings", &x, &y, w, h, UIW_CLOSE) || ui_input()->keys[UIK_ESCAPE]) {
         settings_save();
         app_set_screen(SCR_TITLE);
         return;
@@ -600,7 +600,7 @@ static void draw_settings_screen(void) {
 static void draw_howto(void) {
     float W = ui_width(), H = ui_height();
     float w = 1000, h = 760, x = (W - w) * 0.5f, y = (H - h) * 0.5f;
-    if (!ui_window("How to Play", x, y, w, h, true) || ui_input()->keys[UIK_ESCAPE]) {
+    if (!ui_window("How to Play", &x, &y, w, h, UIW_CLOSE) || ui_input()->keys[UIK_ESCAPE]) {
         app_set_screen(SCR_TITLE);
         return;
     }
@@ -618,7 +618,7 @@ static void draw_howto(void) {
 static void draw_credits(void) {
     float W = ui_width(), H = ui_height();
     float w = 760, h = 640, x = (W - w) * 0.5f, y = (H - h) * 0.5f;
-    if (!ui_window("Credits", x, y, w, h, true) || ui_input()->keys[UIK_ESCAPE]) {
+    if (!ui_window("Credits", &x, &y, w, h, UIW_CLOSE) || ui_input()->keys[UIK_ESCAPE]) {
         app_set_screen(SCR_TITLE);
         return;
     }
@@ -656,4 +656,5 @@ void screens_draw(void) {
     case SCR_CREDITS: draw_credits(); break;
     default: break;
     }
+    ui_window_end();
 }

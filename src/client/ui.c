@@ -174,6 +174,32 @@ static bool g_focus_seen;
 /*Slider drag*/
 static uint32_t g_active_id;
 
+/*Windows: offsets from the place the caller asks for (moved by dragging
+ * the title bar), stacking order and rectangles, used to keep the widgets
+ * of covered windows from reacting to the mouse.*/
+#define MAX_WINDOWS 32
+typedef struct {
+    uint32_t id;
+    float dx, dy;
+    int z;
+    bool modal;
+    float x0, y0, x1, y1;
+    uint64_t seen; /*frame it was last drawn, 0 = never*/
+} WinState;
+static WinState g_wins[MAX_WINDOWS];
+static int g_nwins, g_z;
+static uint64_t g_frame;
+static int g_cur_win = -1;  /*window being drawn, -1 = none*/
+static bool g_any_win;      /*a window was already drawn this frame*/
+static uint32_t g_drag_win, g_title_click_id;
+static float g_drag_gx, g_drag_gy;
+static double g_title_click_t;
+/*Draw-order segments of layer 0: the segments of the windows are put
+ * back in stacking order at the end of the frame.*/
+typedef struct { uint32_t start, end; int win; } Segment;
+static Segment g_segs[2 * MAX_WINDOWS + 2];
+static int g_nsegs;
+
 /*Tooltip*/
 static char g_tip_title[128], g_tip_body[1024];
 static uint32_t g_tip_col;
@@ -721,6 +747,58 @@ void ui_begin_frame(int fb_w, int fb_h, float scale, const UIInput *in, float dt
     g_tip = false;
     g_focus_claim = 0;
     g_focus_seen = false;
+    g_frame++;
+    g_cur_win = -1;
+    g_any_win = false;
+    g_nsegs = 1;
+    g_segs[0] = (Segment){0, 0, -1};
+    /*the dragged window may have been closed while the button was down*/
+    if (g_drag_win && !g_in.down[0]) {
+        if (g_active_id == g_drag_win) g_active_id = 0;
+        g_drag_win = 0;
+    }
+}
+
+static void seg_open(int win) {
+    g_segs[g_nsegs - 1].end = g_layers[0].n;
+    if (g_nsegs >= (int)(sizeof(g_segs) / sizeof(g_segs[0]))) return; /*keeps drawing into the last one*/
+    g_segs[g_nsegs++] = (Segment){g_layers[0].n, g_layers[0].n, win};
+}
+
+static int win_rank(const WinState *w) { return w->z + (w->modal ? (1 << 28) : 0); }
+
+/*Copies layer 0 to the output with the windows in stacking order: every
+ * window segment slot receives the next window from the bottom up, so
+ * what is drawn before / after all the windows stays below / above them.*/
+static void emit_layer0(void) {
+    g_segs[g_nsegs - 1].end = g_layers[0].n;
+    int order[2 * MAX_WINDOWS + 2], nw = 0;
+    for (int i = 0; i < g_nsegs; i++)
+        if (g_segs[i].win >= 0) order[nw++] = i;
+    for (int i = 1; i < nw; i++) /*insertion sort by rank, stable*/
+        for (int j = i; j > 0 && win_rank(&g_wins[g_segs[order[j - 1]].win]) > win_rank(&g_wins[g_segs[order[j]].win]); j--) {
+            int t = order[j];
+            order[j] = order[j - 1];
+            order[j - 1] = t;
+        }
+    int next = 0;
+    for (int i = 0; i < g_nsegs; i++) {
+        const Segment *sg = g_segs[i].win >= 0 ? &g_segs[order[next++]] : &g_segs[i];
+        vlist_push(&g_out, g_layers[0].v + sg->start, sg->end - sg->start);
+    }
+}
+
+/*True when a window stacked above the widget being drawn covers (mx,my).
+ * Widgets drawn before the first window count as below every window,
+ * those drawn after the windows as above them.*/
+static bool occluded(float mx, float my) {
+    int cur = g_cur_win >= 0 ? win_rank(&g_wins[g_cur_win]) : (g_any_win ? 1 << 30 : -1);
+    for (int i = 0; i < g_nwins; i++) {
+        const WinState *w = &g_wins[i];
+        if (i == g_cur_win || !w->seen || w->seen + 1 < g_frame || win_rank(w) <= cur) continue;
+        if (w->modal || (mx >= w->x0 && mx < w->x1 && my >= w->y0 && my < w->y1)) return true;
+    }
+    return false;
 }
 
 static void draw_tooltip(void);
@@ -731,7 +809,7 @@ void ui_end_frame(UIFrame *out) {
     if (g_in.pressed[0] && g_focus_claim == 0) g_focus_id = 0;
     if (!g_focus_seen) g_focus_id = 0;
     g_out.n = 0;
-    vlist_push(&g_out, g_layers[0].v, g_layers[0].n);
+    emit_layer0();
     vlist_push(&g_out, g_layers[1].v, g_layers[1].n);
     out->v = g_out.v;
     out->count = g_out.n;
@@ -772,7 +850,8 @@ static bool in_clip(float mx, float my) {
 }
 
 bool ui_hover(float x, float y, float w, float h) {
-    return g_in.mx >= x && g_in.mx < x + w && g_in.my >= y && g_in.my < y + h && in_clip(g_in.mx, g_in.my);
+    return g_in.mx >= x && g_in.mx < x + w && g_in.my >= y && g_in.my < y + h && in_clip(g_in.mx, g_in.my) &&
+           !occluded(g_in.mx, g_in.my);
 }
 
 bool ui_clicked(float x, float y, float w, float h, int button) {
@@ -1033,15 +1112,78 @@ void ui_panel(float x, float y, float w, float h) {
     ui_frame_ornament(x, y, w, h, UIC(176, 138, 70, 255));
 }
 
-bool ui_window(const char *title, float x, float y, float w, float h, bool closable) {
+static WinState *win_get(uint32_t id) {
+    for (int i = 0; i < g_nwins; i++)
+        if (g_wins[i].id == id) return &g_wins[i];
+    int slot = g_nwins;
+    if (g_nwins < MAX_WINDOWS) g_nwins++;
+    else /*full: forget the window not seen for the longest time*/
+        for (int i = slot = 0; i < g_nwins; i++)
+            if (g_wins[i].seen < g_wins[slot].seen) slot = i;
+    g_wins[slot] = (WinState){.id = id};
+    return &g_wins[slot];
+}
+
+bool ui_window(const char *title, float *px, float *py, float w, float h, int flags) {
+    /*"Text##key": only "Text" is shown, "##key" identifies the window*/
+    const char *key = strstr(title, "##");
+    char shown[128];
+    snprintf(shown, sizeof(shown), "%.*s", key ? (int)(key - title) : (int)strlen(title), title);
+    uint32_t id = hash_str(key ? key : title);
+
+    if (g_cur_win >= 0) ui_window_end();
+    WinState *ws = win_get(id);
+    if (!ws->seen || ws->seen + 1 < g_frame) ws->z = ++g_z; /*just opened: on top*/
+    ws->modal = (flags & UIW_MODAL) != 0;
+    g_cur_win = (int)(ws - g_wins);
+    g_any_win = true;
+    seg_open(g_cur_win);
+
+    float x = *px + ws->dx, y = *py + ws->dy;
+    if (g_drag_win == id && g_in.down[0]) {
+        x = g_in.mx - g_drag_gx;
+        y = g_in.my - g_drag_gy;
+    }
+    /*keep a piece of the title bar on screen*/
+    x = clampf(x, 60 - w, g_w - 60);
+    y = clampf(y, 0, g_h - 40);
+    ws->dx = x - *px;
+    ws->dy = y - *py;
+    *px = x;
+    *py = y;
+    ws->x0 = x;
+    ws->y0 = y;
+    ws->x1 = x + w;
+    ws->y1 = y + h;
+    ws->seen = g_frame;
+    if (g_in.pressed[0] && ui_hover(x, y, w, h)) ws->z = ++g_z; /*click: bring to front*/
+
+    if (ws->modal) {
+        ui_rect(0, 0, g_w, g_h, UIC(0, 0, 0, 120));
+        ui_block(0, 0, g_w, g_h);
+    }
     ui_panel(x, y, w, h);
-    float th = 40;
-    ui_rect_grad(x + 6, y + 6, w - 12, th - 6, UIC(70, 52, 32, 200), UIC(30, 24, 20, 120));
+    float th = 40, bs = 26;
+    float bar_w = w - 12 - ((flags & UIW_CLOSE) ? bs + 10 : 0);
+    bool bar_hov = ui_hover(x + 6, y + 6, bar_w, th - 6) || g_drag_win == id;
+    ui_rect_grad(x + 6, y + 6, w - 12, th - 6, bar_hov ? UIC(92, 68, 40, 215) : UIC(70, 52, 32, 200), UIC(30, 24, 20, 120));
     ui_line(x + 12, y + th, x + w - 12, y + th, 1.2f, UIC(176, 138, 70, 200));
-    ui_text_shadow(FONT_TITLE, 22, x + w * 0.5f, y + th * 0.5f + 3, title, COL_GOLD, ALIGN_CENTER | ALIGN_MIDDLE);
+    ui_text_shadow(FONT_TITLE, 22, x + w * 0.5f, y + th * 0.5f + 3, shown, COL_GOLD, ALIGN_CENTER | ALIGN_MIDDLE);
+    if (g_in.pressed[0] && bar_hov && g_drag_win != id) {
+        if (g_title_click_id == id && g_time - g_title_click_t < 0.5) {
+            ws->dx = ws->dy = 0; /*double click: back to the default place*/
+            g_title_click_id = 0;
+        } else {
+            g_drag_win = g_active_id = id;
+            g_drag_gx = g_in.mx - x;
+            g_drag_gy = g_in.my - y;
+            g_title_click_id = id;
+            g_title_click_t = g_time;
+        }
+    }
     bool open = true;
-    if (closable) {
-        float bs = 26, bx = x + w - bs - 10, by = y + 9;
+    if (flags & UIW_CLOSE) {
+        float bx = x + w - bs - 10, by = y + 9;
         bool hov = ui_hover(bx, by, bs, bs);
         ui_rrect(bx, by, bs, bs, 5, hov ? UIC(150, 50, 40, 255) : UIC(50, 40, 46, 220));
         ui_line(bx + 8, by + 8, bx + bs - 8, by + bs - 8, 2.2f, COL_TEXT);
@@ -1050,6 +1192,30 @@ bool ui_window(const char *title, float x, float y, float w, float h, bool closa
         if (hov && g_in.pressed[0]) open = false;
     }
     return open;
+}
+
+void ui_window_end(void) {
+    if (g_cur_win < 0) return;
+    g_cur_win = -1;
+    seg_open(-1);
+}
+
+int ui_window_saved(int i, uint32_t *id, float *dx, float *dy) {
+    for (int k = 0; k < g_nwins; k++) {
+        if (g_wins[k].dx == 0 && g_wins[k].dy == 0) continue;
+        if (i-- > 0) continue;
+        *id = g_wins[k].id;
+        *dx = g_wins[k].dx;
+        *dy = g_wins[k].dy;
+        return 1;
+    }
+    return 0;
+}
+
+void ui_window_restore(uint32_t id, float dx, float dy) {
+    WinState *ws = win_get(id);
+    ws->dx = dx;
+    ws->dy = dy;
 }
 
 void ui_bar(float x, float y, float w, float h, float frac, uint32_t col_top, uint32_t col_bot, const char *label) {

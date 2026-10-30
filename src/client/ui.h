@@ -170,9 +170,21 @@ bool ui_slider(const char *id, float x, float y, float w, float *value, float mi
 bool ui_text_field(const char *id, float x, float y, float w, float h, char *buf, int cap, int flags, const char *placeholder);
 bool ui_text_field_focused(const char *id);
 void ui_focus(const char *id);
-/*Decorated window frame with a title bar. Returns false if closed via
- * the X button (when closable).*/
-bool ui_window(const char *title, float x, float y, float w, float h, bool closable);
+/*Decorated window frame with a title bar. *x,*y hold the default place
+ * and receive the actual one: the player can drag the window by its title
+ * bar (double click: back to the default place). Clicking a window brings
+ * it to the front, and widgets covered by another window ignore the mouse.
+ * "Text##key" shows "Text" and identifies the window by "##key".
+ * Everything drawn until ui_window_end() belongs to the window.
+ * Returns false if closed via the X button.*/
+#define UIW_CLOSE 1 /*X button*/
+#define UIW_MODAL 2 /*dims the screen, always on top, blocks other windows*/
+bool ui_window(const char *title, float *x, float *y, float w, float h, int flags);
+void ui_window_end(void);
+/*Moved windows, for the settings file: i-th window with a non-zero
+ * offset (returns 0 past the last one) / offset restored at start-up.*/
+int ui_window_saved(int i, uint32_t *id, float *dx, float *dy);
+void ui_window_restore(uint32_t id, float dx, float dy);
 /*Plain panel with the ornamental border.*/
 void ui_panel(float x, float y, float w, float h);
 void ui_frame_ornament(float x, float y, float w, float h, uint32_t col);

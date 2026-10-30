@@ -100,7 +100,8 @@ Checksums (`SHA256SUMS.txt`) and older versions are on the
 - HUD with portrait, HP/XP, minimap, objective tracker, hotbar,
   target frame, name plates, toasts and contextual tips.
 - Inventory with equipment doll, character sheet, spellbook, shops,
-  world map and a full in-game guide (<kbd>F1</kbd>).
+  world map and a full in-game guide (<kbd>F1</kbd>); every window can be
+  dragged anywhere and remembers its place.
 - Chat with command auto-completion and history.
 
 </td>
@@ -150,6 +151,7 @@ All controls are also listed in the game: press <kbd>F1</kbd> or <kbd>H</kbd>.
 | <kbd>Enter</kbd> | chat and commands (<kbd>Tab</kbd> completes) |
 | <kbd>R</kbd> <kbd>T</kbd> <kbd>L</kbd> <kbd>N</kbd> | rest · search · look · show all names |
 | <kbd>Esc</kbd> · <kbd>F12</kbd> | menu · screenshot |
+| Drag a title bar · double-click it | move a window · put it back |
 
 ---
 

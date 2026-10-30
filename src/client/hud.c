@@ -430,7 +430,7 @@ static void item_cell_interact(float x, float y, float s, const InvItem *it, con
 
 static void draw_inventory(float x, float y) {
     float w = 600, h = 668;
-    if (!ui_window("Inventory", x, y, w, h, true)) { g_app.windows &= ~(uint32_t)WIN_INVENTORY; return; }
+    if (!ui_window("Inventory", &x, &y, w, h, UIW_CLOSE)) { g_app.windows &= ~(uint32_t)WIN_INVENTORY; return; }
     pthread_mutex_lock(&g_state_mutex);
     MsgInventory inv = g_inventory;
     pthread_mutex_unlock(&g_state_mutex);
@@ -521,7 +521,7 @@ static const char *stat_help[6] = {
 
 static void draw_character(float x, float y) {
     float w = 560, h = 700;
-    if (!ui_window("Character", x, y, w, h, true)) { g_app.windows &= ~(uint32_t)WIN_CHARACTER; return; }
+    if (!ui_window("Character", &x, &y, w, h, UIW_CLOSE)) { g_app.windows &= ~(uint32_t)WIN_CHARACTER; return; }
     char buf[256];
     float cx = x + 28, cy = y + 60;
     const char *race = (g_race_id >= 0 && g_race_id < RACE_COUNT) ? RACES[g_race_id].name : "?";
@@ -664,7 +664,7 @@ static const char *school_tag(const SpellEntry *s) {
 
 static void draw_spells(float x, float y) {
     float w = 620, h = 660;
-    if (!ui_window("Spellbook", x, y, w, h, true)) { g_app.windows &= ~(uint32_t)WIN_SPELLS; return; }
+    if (!ui_window("Spellbook", &x, &y, w, h, UIW_CLOSE)) { g_app.windows &= ~(uint32_t)WIN_SPELLS; return; }
     hotbar_load();
     pthread_mutex_lock(&g_state_mutex);
     static MsgSpellbook book;
@@ -740,7 +740,9 @@ static void draw_shop(float x, float y) {
     shop = g_shop;
     pthread_mutex_unlock(&g_state_mutex);
     if (shop.merchant_id == 0) { g_app.windows &= ~(uint32_t)WIN_SHOP; return; }
-    if (!ui_window(shop.shop_name[0] ? shop.shop_name : "Merchant", x, y, w, h, true)) {
+    char title[80];
+    snprintf(title, sizeof(title), "%s##shop", shop.shop_name[0] ? shop.shop_name : "Merchant");
+    if (!ui_window(title, &x, &y, w, h, UIW_CLOSE)) {
         g_app.windows &= ~(uint32_t)WIN_SHOP;
         return;
     }
@@ -877,8 +879,9 @@ static void find_known_stairs(int *dx, int *dy, int *ux, int *uy) {
 static void draw_map_window(void) {
     float W = ui_width(), H = ui_height();
     float w = fminf(W - 120, 1100), h = fminf(H - 120, 860), x = (W - w) * 0.5f, y = (H - h) * 0.5f;
-    char tb[64];
-    if (!ui_window(floor_title(g_app.snap->my_floor, tb, sizeof(tb)), x, y, w, h, true)) {
+    char tb[64], title[80];
+    snprintf(title, sizeof(title), "%s##map", floor_title(g_app.snap->my_floor, tb, sizeof(tb)));
+    if (!ui_window(title, &x, &y, w, h, UIW_CLOSE)) {
         g_app.windows &= ~(uint32_t)WIN_MAP;
         return;
     }
@@ -886,16 +889,19 @@ static void draw_map_window(void) {
     static float pan_x, pan_y;
     float mx = x + 16, my = y + 52, mw = w - 32, mh = h - 110;
     ui_rect(mx, my, mw, mh, UIC(8, 6, 10, 255));
+    static bool panning; /*a drag that started on the map (not on the title bar)*/
+    static float lx, ly;
     if (ui_hover(mx, my, mw, mh)) {
         if (ui_input()->wheel != 0) zoom = clampf(zoom * powf(1.2f, ui_input()->wheel), 1.0f, 12.0f);
-        static float lx, ly;
-        if (ui_input()->down[0] && !ui_input()->pressed[0]) {
-            pan_x -= (ui_input()->mx - lx) / zoom;
-            pan_y -= (ui_input()->my - ly) / zoom;
-        }
-        lx = ui_input()->mx;
-        ly = ui_input()->my;
+        if (ui_input()->pressed[0]) panning = true;
     }
+    if (!ui_input()->down[0]) panning = false;
+    if (panning && !ui_input()->pressed[0]) {
+        pan_x -= (ui_input()->mx - lx) / zoom;
+        pan_y -= (ui_input()->my - ly) / zoom;
+    }
+    lx = ui_input()->mx;
+    ly = ui_input()->my;
     int cx = g_app.snap->my_x + (int)pan_x, cy = g_app.snap->my_y + (int)pan_y;
     draw_map_area(mx, my, mw, mh, cx, cy, zoom, true);
     /*landmarks*/
@@ -980,7 +986,7 @@ static const char *HELP_TEXT[] = {
     "^8Interact^0  F: talk to merchants, drink from the fountain, meditate, disarm traps (the prompt above the hotbar tells you what F does).\n"
     "^8Items^0  G pick up, 1-4 use the quick belt, I inventory (left-click to use/equip, right-click for more).\n"
     "^8Magic^0  K spellbook, 5-0 hotbar spells.\n"
-    "^8Windows^0  C character, M map, H or F1 this guide, Esc menu.\n"
+    "^8Windows^0  C character, M map, H or F1 this guide, Esc menu. Drag a window by its title bar to move it; double-click the title to put it back.\n"
     "^8Other^0  R rest, L look around, T search for traps, N toggle all name plates, Enter chat/commands, F12 screenshot.",
     /*Combat*/
     "^8How fights work^0\n"
@@ -1672,10 +1678,8 @@ static void draw_death(void) {
 
 static void draw_pause(void) {
     float W = ui_width(), H = ui_height();
-    ui_rect(0, 0, W, H, UIC(0, 0, 0, 120));
-    ui_block(0, 0, W, H);
     float w = 400, h = 470, x = (W - w) * 0.5f, y = (H - h) * 0.5f;
-    if (!ui_window("Menu", x, y, w, h, true)) { g_app.windows &= ~(uint32_t)WIN_PAUSE; return; }
+    if (!ui_window("Menu", &x, &y, w, h, UIW_CLOSE | UIW_MODAL)) { g_app.windows &= ~(uint32_t)WIN_PAUSE; return; }
     float by = y + 64, bx = x + 50, bw = w - 100;
     if (ui_button("Resume", bx, by, bw, 46, BTN_PRIMARY)) g_app.windows &= ~(uint32_t)WIN_PAUSE;
     by += 58;
@@ -1718,12 +1722,16 @@ void hud_draw(void) {
     if (g_app.windows & WIN_SHOP) draw_shop(left_x, top);
     else if (g_app.windows & WIN_CHARACTER) draw_character(left_x, top);
     else if (g_app.windows & WIN_SPELLS) draw_spells(left_x, top);
+    ui_window_end();
     if ((g_app.windows & WIN_SHOP) && (g_app.windows & WIN_CHARACTER)) draw_character(left_x + 660, top);
+    ui_window_end();
     if (g_app.windows & WIN_INVENTORY) draw_inventory(W - 600 - 300, top);
+    ui_window_end();
     if (g_app.windows & WIN_MAP) draw_map_window();
+    ui_window_end();
     if (g_app.windows & WIN_HELP) {
         float w = 1000, h = 740, x = (W - w) * 0.5f, y = (H - h) * 0.5f;
-        if (!ui_window("Guide", x, y, w, h, true)) g_app.windows &= ~(uint32_t)WIN_HELP;
+        if (!ui_window("Guide", &x, &y, w, h, UIW_CLOSE)) g_app.windows &= ~(uint32_t)WIN_HELP;
         else {
             const char **names;
             int n = hud_help_tabs(&names);
@@ -1735,15 +1743,18 @@ void hud_draw(void) {
             }
             hud_help_content(x + 24, y + 104, w - 48, h - 128, g_app.help_tab);
         }
+        ui_window_end();
     }
     if (g_app.windows & WIN_SETTINGS) {
         float w = 900, h = 700, x = (W - w) * 0.5f, y = (H - h) * 0.5f;
-        if (!ui_window("Settings", x, y, w, h, true)) { g_app.windows &= ~(uint32_t)WIN_SETTINGS; settings_save(); }
+        if (!ui_window("Settings", &x, &y, w, h, UIW_CLOSE)) { g_app.windows &= ~(uint32_t)WIN_SETTINGS; settings_save(); }
         else hud_settings_content(x + 24, y + 56, w - 48, h - 80);
+        ui_window_end();
     }
     ctx_menu_draw();
     draw_death();
     if (g_app.windows & WIN_PAUSE) draw_pause();
+    ui_window_end();
 
     /*Escape: close the topmost thing, else open the menu*/
     if (ui_input()->keys[UIK_ESCAPE] && !g_app.chat_open && !g_ctx.open) {
