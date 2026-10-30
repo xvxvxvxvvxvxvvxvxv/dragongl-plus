@@ -1,3 +1,10 @@
+* Fri Oct 30 2026 DragonGL+ - 2026.10.30.01
+- SHOP: "browse <n>" no longer prints raw HTML markup (<br />, <strong>,
+  table tags) from items.json; item descriptions are turned into plain
+  text when the data is loaded.
+- DATA: fixed a malformed tag in the Rod of Alertness description that
+  hid its "Protective Aura" paragraph, a misspelled <strong> tag, and a
+  few typos in item and monster descriptions.
 * Tue Oct 27 2026 DragonGL+ - 2026.10.27.01
 - NEW CLIENT: complete rewrite of the graphical client. Renderer-independent
   frame description (scene + UI vertex streams, one uniform block) drawn by
