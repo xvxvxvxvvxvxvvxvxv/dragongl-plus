@@ -75,4 +75,4 @@ COMANDI: vedi la sezione inglese qui sopra, oppure premi F1 / H nel gioco.
 =============================================================================
   See the licenses/ folder: GLFW (zlib), volk (MIT), Vulkan headers
   (Apache-2.0/MIT), miniaudio (MIT-0), stb (public domain), wepoll
-  (BSD-2), Cinzel and Alegreya Sans fonts (SIL OFL 1.1).
+  (BSD-2), cJSON (MIT), Cinzel and Alegreya Sans fonts (SIL OFL 1.1).

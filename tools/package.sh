@@ -56,6 +56,8 @@ cp "$T/miniaudio/LICENSE"             "$STAGE/licenses/miniaudio.txt"
 cp "$T/wepoll/LICENSE"                "$STAGE/licenses/wepoll-BSD-2.txt"
 cp "$T/fonts/OFL-Cinzel.txt"          "$STAGE/licenses/Font-Cinzel-OFL.txt"
 cp "$T/fonts/OFL-AlegreyaSans.txt"    "$STAGE/licenses/Font-AlegreyaSans-OFL.txt"
+# cJSON: the MIT notice is the header comment of the source file
+sed -n '2,/^\*\//p' "$ROOT/src/shared/cJSON.c" | sed '$d' | sed 's/^  //' > "$STAGE/licenses/cJSON-MIT.txt"
 cat > "$STAGE/licenses/stb.txt" <<'EOF'
 stb_truetype.h and stb_image_write.h by Sean Barrett and contributors
 (https://github.com/nothings/stb) - public domain (Unlicense) or MIT,
