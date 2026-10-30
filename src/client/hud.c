@@ -1535,7 +1535,17 @@ static void draw_chat(void) {
     float idle = (float)(g_app.time - last_activity);
     float panel_a = open || hov ? 1.0f : clampf(1.0f - (idle - 10.0f) / 3.0f, 0.0f, 1.0f);
     if (open || hov) ui_rrect(x, y, w, h, 8, UIC(8, 6, 10, 180));
-    else if (panel_a > 0.01f) ui_rect_hgrad(x, y + h * 0.45f, w, h * 0.55f, UIC(8, 6, 10, (int)(110 * panel_a)), UIC(8, 6, 10, 0));
+    else if (panel_a > 0.01f) {
+        /*backdrop behind the lines still on screen (newest at the bottom)*/
+        int shown = 0;
+        pthread_mutex_lock(&g_state_mutex);
+        for (; shown < lines && (uint32_t)shown < total && shown < LOG_CAP; shown++)
+            if (g_app.time - g_log[(total - 1 - (uint32_t)shown) % LOG_CAP].time > 15.0) break;
+        pthread_mutex_unlock(&g_state_mutex);
+        float bh = (float)shown * lh + 16;
+        if (shown > 0)
+            ui_rect_hgrad(x, y + h - bh, w, bh, UIC(8, 6, 10, (int)(110 * panel_a)), UIC(8, 6, 10, 0));
+    }
     if (open || hov) ui_block(x, y, w, h);
     static int scroll;
     if ((open || hov) && ui_input()->wheel != 0) scroll += (int)ui_input()->wheel * 3;
