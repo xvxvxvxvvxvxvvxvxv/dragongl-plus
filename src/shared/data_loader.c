@@ -38,6 +38,58 @@ int item_database_size = 0;
 SpellTemplate* spell_database = NULL;
 int spell_database_size = 0;
 
+/* Item descriptions in items.json contain HTML markup (<br />, <strong>,
+ * tables...) meant for the web data editor. The game shows them as plain
+ * chat text, so drop the tags at load time: inline tags (strong, em, b, i)
+ * vanish, every other tag becomes a space, then runs of whitespace are
+ * collapsed. Returns a new heap string. */
+static char* strip_html_tags(const char* s) {
+    size_t n = strlen(s);
+    char* out = malloc(n + 1);
+    if (!out) {
+        return NULL;
+    }
+    size_t o = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (s[i] == '<') {
+            const char* end = strchr(s + i, '>');
+            if (end) {
+                const char* t = s + i + 1;
+                if (*t == '/') t++;
+                char tag[8];
+                size_t tl = 0;
+                while (isalpha((unsigned char)t[tl])) {
+                    if (tl < sizeof(tag) - 1) tag[tl] = (char)tolower((unsigned char)t[tl]);
+                    tl++;
+                }
+                tag[tl < sizeof(tag) ? tl : sizeof(tag) - 1] = '\0';
+                bool is_inline = strcmp(tag, "b") == 0 || strcmp(tag, "i") == 0 ||
+                                 strcmp(tag, "em") == 0 || strcmp(tag, "strong") == 0;
+                if (!is_inline) {
+                    out[o++] = ' ';
+                }
+                i = (size_t)(end - s);
+                continue;
+            }
+        }
+        out[o++] = (s[i] == '\n' || s[i] == '\r' || s[i] == '\t') ? ' ' : s[i];
+    }
+    out[o] = '\0';
+
+    /* Collapse whitespace, drop it before punctuation, trim both ends. */
+    size_t w = 0;
+    for (size_t r = 0; r < o; r++) {
+        if (out[r] == ' ') {
+            if (w == 0 || out[w - 1] == ' ') continue;
+            if (r + 1 < o && strchr(",.;:)", out[r + 1])) continue;
+        }
+        out[w++] = out[r];
+    }
+    while (w > 0 && out[w - 1] == ' ') w--;
+    out[w] = '\0';
+    return out;
+}
+
 //Case-insensitive helper strstr
 static const char* my_strcasestr(const char* haystack, const char* needle) {
     if (!haystack) {
@@ -328,8 +380,9 @@ static bool load_items_json(const char* filepath) {
             item_database[i].name = strdup(name->valuestring);
         }
         if (cJSON_IsString(desc)) {
-            item_database[i].description = strdup(desc->valuestring);
-        } else {
+            item_database[i].description = strip_html_tags(desc->valuestring);
+        }
+        if (!item_database[i].description) {
             item_database[i].description = strdup("No description available.");
         }
         
