@@ -3150,6 +3150,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         print_merchant_inventory(c, &npcs[i]);
         return;
       }
+    send_text_to_client(c->sock, "[SYSTEM] No merchants nearby.");
+    return;
   }
 
   // lore <name> — inspects an item in the backpack or reads its content if it is a book
