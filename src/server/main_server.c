@@ -682,7 +682,7 @@ void check_traps(Client *c, NPC *npcs) {
         if (passive_perc >= t->detection_dc) {
           t->detected = true;
           send_text_to_client(
-              c->sock, "[SYSTEM] You notice a tiny hole in the wall..."
+              c->sock, "[SYSTEM] You notice a tiny hole in the wall... "
                        "It looks like the launch tube of a dart trap!");
         }
       }
@@ -730,7 +730,7 @@ void check_traps(Client *c, NPC *npcs) {
                 "Poisoned", EVENT_ON_TURN_START, MOD_ADDITIVE, 0, 4, false};
             send_text_to_client(
                 c->sock,
-                "[STATE] The poison on the dart enters your blood!"
+                "[STATE] The poison on the dart enters your blood! "
                 "You feel your strength abandon you... (Poisoned for 4 rounds)");
           } else if (!saved_poison) {
             send_text_to_client(
@@ -940,7 +940,7 @@ void check_traps(Client *c, NPC *npcs) {
             broadcast_player_state(c);
           }
         } else if (t->type == TRAP_FLOOD) {
-          send_text_to_client(c->sock, "[DANGER] Water starts gushing out"
+          send_text_to_client(c->sock, "[DANGER] Water starts gushing out in "
                                        "rivers from hidden valves!");
           Floor *fl = &master_world->floors[c->floor_id];
           for (int dy = -3; dy <= 3; dy++) {
@@ -969,8 +969,8 @@ void check_traps(Client *c, NPC *npcs) {
             }
           }
         } else if (t->type == TRAP_STONE_TOMB) {
-          send_text_to_client(c->sock, "[DANGER] Thick stone walls yes"
-                                       "they rise from the ground, trapping you!");
+          send_text_to_client(c->sock, "[DANGER] Thick stone walls "
+                                       "rise from the ground, trapping you!");
           Floor *fl = &master_world->floors[c->floor_id];
           for (int dy = -1; dy <= 1; dy++) {
             for (int dx = -1; dx <= 1; dx++) {
@@ -1018,7 +1018,7 @@ void check_traps(Client *c, NPC *npcs) {
               sfl->entity_grid[target_npc->y][target_npc->x] = target_npc->entity_id;
             } else {
               send_text_to_client(c->sock,
-                                  "[MAGIC] A dark force envelops you! Exchanges"
+                                  "[MAGIC] A dark force envelops you! It exchanges "
                                   "your vitality with a %s!",
                                   target_npc->template->name);
               int thp = c->hp;
@@ -1027,7 +1027,7 @@ void check_traps(Client *c, NPC *npcs) {
             }
           } else {
             send_text_to_client(c->sock,
-                                "[MAGIC] The trap activates but does not find"
+                                "[MAGIC] The trap activates but does not find "
                                 "valid targets nearby.");
           }
         }
@@ -2350,7 +2350,7 @@ void check_level_up(Client *c) {
     send_text_to_client(c->sock, "[LEVEL] *** YOU HAVE RISE TO LEVEL %d! ***",
                         c->level);
     send_text_to_client(c->sock,
-                        "[LEVEL] Maximum HP increased by %d (Total: %d)."
+                        "[LEVEL] Maximum HP increased by %d (Total: %d). "
                         "Health and mana restored.",
                         hp_gain, c->max_hp);
     send_text_to_client(c->sock, "[LEVEL] You got 3 stat points! Use 'train <stat>' to assign them (e.g. 'train str') or 'train random'.");

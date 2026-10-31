@@ -1,3 +1,11 @@
+* Sat Oct 31 2026 DragonGL+ - 2026.10.31.01
+- COMMANDS: "open <dir>" and "close <dir>" work again (they always
+  answered "Unrecognized command"); "talk" away from a merchant says
+  nobody is nearby instead of "Unrecognized command".
+- TEXT: fixed run-together words and mistranslations in many server
+  messages (traps, curses, belt, lantern, spell books, boss reward),
+  aligned the "look" and "examine" table headers, corrected several
+  "help" lines.
 * Fri Oct 30 2026 DragonGL+ - 2026.10.30.01
 - SHOP: "browse <n>" no longer prints raw HTML markup (<br />, <strong>,
   table tags) from items.json; item descriptions are turned into plain

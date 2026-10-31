@@ -408,7 +408,7 @@ void handle_boss_death(Client *c, NPC *boss) {
           ui_send_event(&g_clients[i], GEV_BOSS_DEFEATED, boss->entity_id, 0,
                         boss->floor_id, boss->x, boss->y);
           send_text_to_client(g_clients[i].sock,
-              "[HEROIC QUEST] Boss %s has been defeated!"
+              "[HEROIC QUEST] Boss %s has been defeated! "
               "You have obtained %lu gold and the stairs have unlocked!",
               boss_name, gold_reward);
         }

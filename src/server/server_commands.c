@@ -432,9 +432,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     send_text_to_client(c->sock, "s, search : Search for secret passages or traps");
     send_text_to_client(c->sock, "train <stat> : Use level up stat points (e.g. train str / random)");
     send_text_to_client(c->sock, "t/T, tunnel <dir> : Dig a wall (t n = tunnel north, d = down)");
-    send_text_to_client(c->sock, "or, open : Open a closed door");
-    send_text_to_client(c->sock, "c, close : Close an open door");
-    send_text_to_client(c->sock, "D, disarm : Disarm at trap");
+    send_text_to_client(c->sock, "o, open <dir> : Open a closed door");
+    send_text_to_client(c->sock, "close <dir> : Close an open door");
+    send_text_to_client(c->sock, "D, disarm : Disarm a trap");
     send_text_to_client(c->sock, "R, rest : Rest to recover HP/Mana");
     send_text_to_client(c->sock, "fountain : Drink from the sacred fountain to heal wounds (Floor 0)");
     send_text_to_client(c->sock, "statue/crystal : Meditate at the crystal statues (Floor 0)");
@@ -450,10 +450,10 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     send_text_to_client(c->sock, "v, throw <n> : Throw an object (e.g. 'v 1')");
     send_text_to_client(c->sock, "fill <n> : Refills a lantern with oil (e.g. 'fill lantern')");
     send_text_to_client(c->sock, "use <n> : Use an item (potions, food, wands)");
-    send_text_to_client(c->sock, "q, quaff <n> : Drink a potion (aka for 'use')");
+    send_text_to_client(c->sock, "q, quaff <n> : Drink a potion (alias for 'use')");
     send_text_to_client(c->sock, "  r, read <n>     : Read book/scroll (e.g. 'read 1')");
-    send_text_to_client(c->sock, "e, eat <n> : Eat food (aka for 'use')");
-    send_text_to_client(c->sock, "z, zap <n> : Use wand (aka for 'use')");
+    send_text_to_client(c->sock, "e, eat <n> : Eat food (alias for 'use')");
+    send_text_to_client(c->sock, "z, zap <n> : Use wand (alias for 'use')");
 
     send_text_to_client(c->sock, "[HELP] --- MAGIC AND CURES ---");
     send_text_to_client(c->sock, "spells : Show your library (spells known)");
@@ -471,7 +471,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     send_text_to_client(c->sock, "  sneak <n>       : Hone shadows (Rogue)");
     send_text_to_client(c->sock, "  meditate <n>    : Learn disciplines (Monk)");
     send_text_to_client(c->sock, "lore <n> : Examine a book or inventory item");
-    send_text_to_client(c->sock, "cures: Cure diseases/poisons at the temple (cost: gold)");
+    send_text_to_client(c->sock, "cure : Cure diseases/poisons at the temple (cost: gold)");
     send_text_to_client(c->sock, "uncurse : Remove curses from the temple (cost: gold)");
     send_text_to_client(c->sock, "retrieve : Retrieve your items and soul from your ghost");
     
@@ -1865,7 +1865,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         if (npcs[i].archetype == ARCH_GOLD) {
           strncat(feet_buf, "| [Golden Bag]", sizeof(feet_buf) - strlen(feet_buf) - 1);
         } else if (npcs[i].archetype == ARCH_TREASURE) {
-          strncat(feet_buf, "| [Treasury Chest]", sizeof(feet_buf) - strlen(feet_buf) - 1);
+          strncat(feet_buf, "| [Treasure Chest]", sizeof(feet_buf) - strlen(feet_buf) - 1);
         } else if (npcs[i].is_ghost) {
           char gbuf[64];
           snprintf(gbuf, sizeof(gbuf), "| [%s remains]", npcs[i].custom_name);
@@ -2003,7 +2003,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     send_text_to_client(c->sock, "[INSPECTION] Illuminated View Range: %d Steps (%d Floor)", vis_rad, f);
     send_text_to_client(c->sock, "[UNDER FEET] Position (%d, %d): %s", px, py, feet_buf);
     send_text_to_client(c->sock, "+--------+-------------------------------------------------------------+");
-    send_text_to_client(c->sock, "| SECTOR| DETECTIONS IN THE ILLUMINATED AREA |");
+    send_text_to_client(c->sock, "| SECTOR | DETECTIONS IN THE ILLUMINATED AREA                          |");
     send_text_to_client(c->sock, "+--------+-------------------------------------------------------------+");
 
     for (int s = 0; s < 8; s++) {
@@ -2265,7 +2265,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
 
     if (!t) {
-      send_text_to_client(c->sock, "[ERROR] Object not found (use name"
+      send_text_to_client(c->sock, "[ERROR] Object not found (use name "
                                    "or backpack number).");
       return;
     }
@@ -2335,8 +2335,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         if (c->backpack_count < MAX_BACKPACK) {
           c->backpack[c->backpack_count++] = prev;
         } else {
-          send_text_to_client(c->sock, "[WARNING] Full backpack, the object"
-                                       "removed it was lost in the void!");
+          send_text_to_client(c->sock, "[WARNING] Full backpack, the removed "
+                                       "object was lost in the void!");
         }
       }
       //===== BLIND IDENTIFICATION (Mechanics 2) =====
@@ -2351,7 +2351,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
               "[MAGIC] By wearing the object you identify it: it's %s!",
               id_buf);
           send_text_to_client(c->sock,
-              "[CURSE] A dark aura envelops your hand!"
+              "[CURSE] A dark aura envelops your hand! "
               "The item is CURSED and you can't take it away!");
         } else {
           send_text_to_client(c->sock,
@@ -2429,7 +2429,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     if (!target_slot) {
       send_text_to_client(c->sock,
-          "[ERROR] Item not found among those equipped."
+          "[ERROR] Item not found among those equipped. "
           "Use 'stats' to see what you're wearing.");
       return;
     }
@@ -2438,11 +2438,11 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       char curse_buf[128];
       get_full_item_name(target_slot, curse_buf, sizeof(curse_buf));
       send_text_to_client(c->sock,
-          "[CURSE] The object '%s' is surrounded by an evil aura!"
+          "[CURSE] The object '%s' is surrounded by an evil aura! "
           "You can't take it off!",
           curse_buf);
       send_text_to_client(c->sock,
-          "[TIP] Find a cleric and use 'uncurse' (200gp)"
+          "[TIP] Find a cleric and use 'uncurse' (200gp) "
           "or use a Scroll of Curse Removal.");
       return;
     }
@@ -2805,7 +2805,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       c->pending_trade_merchant_id = npcs[m_idx].entity_id;
       c->pending_trade_is_buy = false;
       send_text_to_client(c->sock,
-                          "[STORE] Current offer for your %s: %lu gp."
+                          "[STORE] Current offer for your %s: %lu gp. "
                           "Use 'sell %d' to confirm.",
                           item_database[d_idx].name, (unsigned long)final_val,
                           item_idx + 1);
@@ -2866,7 +2866,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     if (c->gold < 100) {
       send_text_to_client(c->sock,
-          "[ALCHEMIST] Identification service costs 100gp."
+          "[ALCHEMIST] Identification service costs 100gp. "
           "You don't have enough gold.");
       return;
     }
@@ -3052,7 +3052,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     if (items_repaired == 0 && total_cost == 0) {
       send_text_to_client(c->sock,
-          "[BLACKSMITH] Your items are in excellent shape, there is nothing"
+          "[BLACKSMITH] Your items are in excellent shape, there is nothing "
           "to repair (or you don't have enough gold).");
     } else {
       send_text_to_client(c->sock,
@@ -3081,13 +3081,13 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     if (!near_cleric) {
       send_text_to_client(c->sock,
-          "[ERROR] You must be near the Cleric to remove"
-          "to curse.");
+          "[ERROR] You must be near the Cleric to remove "
+          "a curse.");
       return;
     }
     if (c->gold < 200) {
       send_text_to_client(c->sock,
-          "[CLERIC] The purification rite costs 200gp."
+          "[CLERIC] The purification rite costs 200gp. "
           "You don't have enough gold.");
       return;
     }
@@ -3119,8 +3119,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     c->gold -= 200;
     send_text_to_client(c->sock,
-        "[CLERIC] The sacred fire burns the curses! %d item(s)."
-        "purified(s) (200gp).", uncursed_count);
+        "[CLERIC] The sacred fire burns away the curses! %d item(s) "
+        "purified (200gp).", uncursed_count);
     return;
   }
   if (strcmp(cmd, "rest") == 0 || strcmp(cmd, "R") == 0) {
@@ -3150,6 +3150,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         print_merchant_inventory(c, &npcs[i]);
         return;
       }
+    send_text_to_client(c->sock, "[SYSTEM] No merchants nearby.");
+    return;
   }
 
   // lore <name> — inspects an item in the backpack or reads its content if it is a book
@@ -3384,15 +3386,15 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         found_idx = c->backpack_count;
         c->backpack_count++;
       } else {
-        send_text_to_client(c->sock, "[ERROR] Backpack too full for"
-                                     "handle the belt item!");
+        send_text_to_client(c->sock, "[ERROR] Backpack too full to "
+                                     "take the belt item!");
         return;
       }
     }
 
     if (found_idx == -1) {
       send_text_to_client(c->sock,
-                          "[ERROR] Item not found in inventory (use"
+                          "[ERROR] Item not found in inventory (use "
                           "name or number).");
       return;
     }
@@ -3469,7 +3471,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       if (!my_temple) {
         /*Non-magical class (e.g. Fighter, Rogue, Barbarian, Monk)*/
         send_text_to_client(c->sock,
-            "[BOOK] Class %s does not have a learning temple:"
+            "[BOOK] Class %s does not have a learning temple: "
             "you cannot activate this book.", CLASSES[c->class_id].name);
         return;
       }
@@ -3483,7 +3485,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
 
       if (!in_temple) {
         send_text_to_client(c->sock,
-            "[RITUAL] To activate '%s' you must go to floor 0, in %s,"
+            "[RITUAL] To activate '%s' you must go to floor 0, in %s, "
             "and use the command '%s %d' while you are physically inside.",
             tmpl->name, my_temple->name,
             my_temple->ritual, found_idx + 1);
@@ -3616,12 +3618,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       } else {
         if (learned > 0) {
           send_text_to_client(c->sock,
-              "[RITUAL] You have learned %d new magic(s)! Use 'spells' for"
+              "[RITUAL] You have learned %d new magic(s)! Use 'spells' to "
               "see your updated library.", learned);
         }
         if (locked > 0) {
           send_text_to_client(c->sock,
-              "[RITUAL] %d spell(s) are still blocked by your level."
+              "[RITUAL] %d spell(s) are still blocked by your level. "
               "Keep the book and return when you are more powerful.", locked);
         }
         if (learned == 0 && locked == 0) {
@@ -3664,8 +3666,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         }
       }
       if (!refilled) {
-        send_text_to_client(c->sock, "[ERROR] You don't have a lantern ready from"
-                                     "Replenish in hand or on belt.");
+        send_text_to_client(c->sock, "[ERROR] You don't have a lantern to "
+                                     "refill in hand or on belt.");
         return;
       }
     } else if (tmpl->heal_amount > 0) {
@@ -3773,7 +3775,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     if (listed == 0)
       send_text_to_client(c->sock,
-          "[GRIMORY] You don't know any magic yet."
+          "[GRIMORY] You don't know any magic yet. "
           "Find a magical book and study it with 'study <n>' (in your classroom temple).");
     return;
   }
@@ -3827,7 +3829,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     {
       if (!spell_known_get(c, sp_idx)) {
         send_text_to_client(c->sock,
-            "[MAGIC] You don't know '%s'. Find the corresponding book"
+            "[MAGIC] You don't know '%s'. Find the corresponding book "
             "and study it at the temple with 'study <n>'.",
             sp->name);
         return;
@@ -4277,7 +4279,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         strncpy(item_query, input, len);
         item_query[len] = '\0';
     } else {
-        send_text_to_client(c->sock, "[SYSTEM] Specifies the direction. Example: throw dart n");
+        send_text_to_client(c->sock, "[SYSTEM] Specify the direction. Example: throw dart n");
         return;
     }
     
@@ -4628,7 +4630,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   if (strcmp(cmd, "examine") == 0 || strcmp(cmd, "ex") == 0) {
     send_text_to_client(c->sock, "[DETAILED EXAMINATION] Area 1 step (Position %d, %d - Floor %d)", c->x, c->y, c->floor_id);
     send_text_to_client(c->sock, "+--------+-----------------------+-------------------------------------------------------+");
-    send_text_to_client(c->sock, "| SQUARE. | TYPE GROUND / WALL | MINING EVALUATION AND ATTENDANCE |");
+    send_text_to_client(c->sock, "| SQUARE | GROUND / WALL TYPE    | MINING POTENTIAL AND PRESENCE                         |");
     send_text_to_client(c->sock, "+--------+-----------------------+-------------------------------------------------------+");
 
     int qx[] = {0, 0, 1, 1, 1, 0, -1, -1, -1};
@@ -4654,7 +4656,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
             if (npcs[m].archetype == ARCH_GOLD) {
               strncat(presence, "| [Golden Bag]", sizeof(presence) - strlen(presence) - 1);
             } else if (npcs[m].archetype == ARCH_TREASURE) {
-              strncat(presence, "| [Treasury Chest]", sizeof(presence) - strlen(presence) - 1);
+              strncat(presence, "| [Treasure Chest]", sizeof(presence) - strlen(presence) - 1);
             } else if (npcs[m].is_ghost) {
               char gbuf[64];
               snprintf(gbuf, sizeof(gbuf), "| [%s remains]", npcs[m].custom_name);
@@ -4882,7 +4884,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       g_recently_opened_doors[MAX_FLOORS][32];
   static int g_recently_opened_door_n[MAX_FLOORS] = {0};
 
-  if (strcmp(cmd, "open") == 0 || strcmp(cmd, "o") == 0) {
+  if (strcmp(cmd, "open") == 0 || strcmp(cmd, "o") == 0 ||
+      strncmp(cmd, "open ", 5) == 0 || strncmp(cmd, "o ", 2) == 0) {
     const char *dir_str = strchr(cmd, ' ');
     if (!dir_str) {
       send_text_to_client(c->sock, "[SYSTEM] Use: open <n|s|e|w>");
@@ -4934,7 +4937,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     return;
   }
-  if (strcmp(cmd, "close") == 0 || strcmp(cmd, "c") == 0) {
+  /*"c <x>" is the cast shorthand, so only the full word takes a direction.*/
+  if (strcmp(cmd, "close") == 0 || strcmp(cmd, "c") == 0 ||
+      strncmp(cmd, "close ", 6) == 0) {
     const char *dir_str = strchr(cmd, ' ');
     if (!dir_str) {
       send_text_to_client(c->sock, "[SYSTEM] Use: close <n|s|e|w>");
