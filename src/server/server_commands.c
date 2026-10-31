@@ -4882,7 +4882,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       g_recently_opened_doors[MAX_FLOORS][32];
   static int g_recently_opened_door_n[MAX_FLOORS] = {0};
 
-  if (strcmp(cmd, "open") == 0 || strcmp(cmd, "o") == 0) {
+  if (strcmp(cmd, "open") == 0 || strcmp(cmd, "o") == 0 ||
+      strncmp(cmd, "open ", 5) == 0 || strncmp(cmd, "o ", 2) == 0) {
     const char *dir_str = strchr(cmd, ' ');
     if (!dir_str) {
       send_text_to_client(c->sock, "[SYSTEM] Use: open <n|s|e|w>");
@@ -4934,7 +4935,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     return;
   }
-  if (strcmp(cmd, "close") == 0 || strcmp(cmd, "c") == 0) {
+  /*"c <x>" is the cast shorthand, so only the full word takes a direction.*/
+  if (strcmp(cmd, "close") == 0 || strcmp(cmd, "c") == 0 ||
+      strncmp(cmd, "close ", 6) == 0) {
     const char *dir_str = strchr(cmd, ' ');
     if (!dir_str) {
       send_text_to_client(c->sock, "[SYSTEM] Use: close <n|s|e|w>");
