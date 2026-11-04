@@ -1,3 +1,10 @@
+* Wed Nov 04 2026 DragonGL+ - 2026.11.04.02
+- MAGIC: the 12 innate class cantrips (Ancestral Totem Call and the
+  others) can be cast without a book, and old saves get them
+  back at login; the missing-book message says "cast", not "throw".
+- COMMANDS: "sell" with an unknown item or number says so instead of
+  staying silent; "remove"/"takeoff" with no name asks what to remove
+  instead of taking off the first equipped item.
 * Wed Nov 04 2026 DragonGL+ - 2026.11.04.01
 - CLIENT: dashes, curly quotes and bullets in server messages and in
   item/monster descriptions are drawn as plain characters instead of '?'.
