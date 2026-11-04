@@ -2033,7 +2033,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       if (near_fountain) {
         c->hp = c->max_hp;
         send_detailed_state(c); //Sync HP with the HUD client
-        send_text_to_client(c->sock, "[SYSTEM] Drink the water from the sacred fountain and feel your wounds magically heal!");
+        send_text_to_client(c->sock, "[SYSTEM] You drink the water from the sacred fountain and feel your wounds magically heal!");
       } else {
         send_text_to_client(c->sock, "[ERROR] You are not near any healing fountains.");
       }
@@ -2064,7 +2064,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         c->hunger_level = 0;
         c->exhaustion_level = 0;
         send_detailed_state(c); //Sync spell slots, hunger and exhaustion with the HUD client
-        send_text_to_client(c->sock, "[SYSTEM] Meditate at the foot of the crystal monument. Your spirit is renewed, chasing away fatigue, hunger and recharging your spells!");
+        send_text_to_client(c->sock, "[SYSTEM] You meditate at the foot of the crystal monument. Your spirit is renewed, chasing away fatigue, hunger and recharging your spells!");
       } else {
         send_text_to_client(c->sock, "[ERROR] You are not near any crystal statues.");
       }
@@ -4651,9 +4651,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   }
   if (strcmp(cmd, "examine") == 0 || strcmp(cmd, "ex") == 0) {
     send_text_to_client(c->sock, "[DETAILED EXAMINATION] Area 1 step (Position %d, %d - Floor %d)", c->x, c->y, c->floor_id);
-    send_text_to_client(c->sock, "+--------+-----------------------+-------------------------------------------------------+");
-    send_text_to_client(c->sock, "| SQUARE | GROUND / WALL TYPE    | MINING POTENTIAL AND PRESENCE                         |");
-    send_text_to_client(c->sock, "+--------+-----------------------+-------------------------------------------------------+");
+    send_text_to_client(c->sock, "+--------+--------------------------+-------------------------------------------------------+");
+    send_text_to_client(c->sock, "| SQUARE | GROUND / WALL TYPE       | MINING POTENTIAL AND PRESENCE                         |");
+    send_text_to_client(c->sock, "+--------+--------------------------+-------------------------------------------------------+");
 
     int qx[] = {0, 0, 1, 1, 1, 0, -1, -1, -1};
     int qy[] = {0, -1, -1, 0, 1, 1, 1, 0, -1};
@@ -4698,11 +4698,11 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         char combined[512];
         snprintf(combined, sizeof(combined), "%s%s", v_min, presence);
         
-        send_text_to_client(c->sock, "| %-6s | %-21s | %-53s |", qnames[i], vname, combined);
+        send_text_to_client(c->sock, "| %-6s | %-24s | %-53s |", qnames[i], vname, combined);
       }
     }
     
-    send_text_to_client(c->sock, "+--------+-----------------------+-------------------------------------------------------+");
+    send_text_to_client(c->sock, "+--------+--------------------------+-------------------------------------------------------+");
     
     bool has_mining_tool = false;
     char tool_name[64] = "";
