@@ -2654,6 +2654,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       }
       save_player_data(c);
       c->pending_trade_merchant_id = -1;
+    } else {
+      send_text_to_client(c->sock, "[ERROR] Item not found in backpack.");
     }
     return;
   }
@@ -3916,7 +3918,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
 
       if (!has_book) {
         send_text_to_client(c->sock,
-            "[MAGIC] You have memorized '%s', but the book containing it is not in your inventory! You have to carry it with you to throw it.",
+            "[MAGIC] You have memorized '%s', but the book containing it is not in your inventory! You have to carry it with you to cast it.",
             sp->name);
         return;
       }
