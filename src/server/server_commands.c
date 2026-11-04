@@ -3197,9 +3197,25 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       if (tmpl->book_spell_count > 0) {
         for (int local_idx = 0; local_idx < tmpl->book_spell_count; local_idx++) {
           int global_idx = tmpl->book_seq * MAX_BOOK_SPELLS + local_idx;
-          int required_pg_level = global_idx / 3;
-          send_text_to_client(c->sock, "  [#%2d] %-25s (Req. Lv PG: %d)", 
-                              global_idx, tmpl->book_spell_names[local_idx], required_pg_level);
+          /*Same level gate the temple ritual applies to a book with an
+           * explicit spell list (spell level * 2, cantrips 1): the old
+           * global_idx / 3 estimate showed requirements of 0 and 1 for
+           * spells the ritual then reported as LOCKED.*/
+          int required_pg_level = -1;
+          for (int k = 0; k < spell_database_size; k++) {
+            if (strcasecmp(spell_database[k].name, tmpl->book_spell_names[local_idx]) == 0) {
+              int sl = spell_database[k].level;
+              required_pg_level = (sl > 0) ? (sl * 2) : 1;
+              break;
+            }
+          }
+          if (required_pg_level > 0) {
+            send_text_to_client(c->sock, "  [#%2d] %-25s (Req. PC Lv: %d)",
+                                global_idx, tmpl->book_spell_names[local_idx], required_pg_level);
+          } else {
+            send_text_to_client(c->sock, "  [#%2d] %-25s",
+                                global_idx, tmpl->book_spell_names[local_idx]);
+          }
         }
       } else {
         send_text_to_client(c->sock, "(No readable spells listed here)");
@@ -3509,7 +3525,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       int already = 0;
 
       send_text_to_client(c->sock,
-          "[RITUAL] %s... '%s' (you are in %s, Lv PG %d):",
+          "[RITUAL] %s... '%s' (you are in %s, PC Lv %d):",
           my_temple->ritual, tmpl->name, my_temple->name, pg_level);
 
       int use_ordered = (tmpl->book_spell_count > 0);
