@@ -908,11 +908,6 @@ static bool load_spells_json(const char* filepath) {
             spell_database[i].name = strdup(name->valuestring);
         }
 
-        //Innate class magic (no book required, always known)
-        if (innate_node && cJSON_IsNumber(innate_node) && innate_node->valueint != 0) {
-            spell_database[i].innate = true;
-        }
-        
         // Defaults
         spell_database[i].level = 0;
         spell_database[i].target_type = SPELL_TARGET_SINGLE;
@@ -923,6 +918,12 @@ static bool load_spells_json(const char* filepath) {
         spell_database[i].dice_sides = 0;
         spell_database[i].has_status_effect = false;
         spell_database[i].innate = false;
+
+        //Innate class magic (no book required, always known). Read after
+        //the defaults above, which used to reset it to false.
+        if (innate_node && cJSON_IsNumber(innate_node) && innate_node->valueint != 0) {
+            spell_database[i].innate = true;
+        }
         
         if (level) {
             if (cJSON_IsString(level)) {
