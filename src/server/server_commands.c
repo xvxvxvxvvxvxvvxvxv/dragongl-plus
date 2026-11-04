@@ -2373,6 +2373,13 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
    * words remove/unequip/takeoff for this command.*/
   if (strncmp(cmd, "remove ", 7) == 0 || strncmp(cmd, "unequip ", 8) == 0 || strncmp(cmd, "takeoff ", 8) == 0) {
     const char *input = strchr(cmd, ' '); if (input) input++; else return;
+    //An empty name matches every item (strcasestr), so "remove " used to
+    //take off whatever was in the first occupied slot.
+    if (input[0] == '\0') {
+      send_text_to_client(c->sock,
+          "[ERROR] Specify the slot or item to remove (e.g. 'remove head').");
+      return;
+    }
     //Slots map by name
     ItemInstance *sls[] = {
         &c->slot_head, &c->slot_neck, &c->slot_body, &c->slot_back,
@@ -2654,6 +2661,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       }
       save_player_data(c);
       c->pending_trade_merchant_id = -1;
+    } else {
+      send_text_to_client(c->sock, "[ERROR] Item not found in backpack.");
     }
     return;
   }
@@ -3916,7 +3925,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
 
       if (!has_book) {
         send_text_to_client(c->sock,
-            "[MAGIC] You have memorized '%s', but the book containing it is not in your inventory! You have to carry it with you to throw it.",
+            "[MAGIC] You have memorized '%s', but the book containing it is not in your inventory! You have to carry it with you to cast it.",
             sp->name);
         return;
       }
