@@ -2033,7 +2033,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       if (near_fountain) {
         c->hp = c->max_hp;
         send_detailed_state(c); //Sync HP with the HUD client
-        send_text_to_client(c->sock, "[SYSTEM] Drink the water from the sacred fountain and feel your wounds magically heal!");
+        send_text_to_client(c->sock, "[SYSTEM] You drink the water from the sacred fountain and feel your wounds magically heal!");
       } else {
         send_text_to_client(c->sock, "[ERROR] You are not near any healing fountains.");
       }
@@ -2064,7 +2064,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         c->hunger_level = 0;
         c->exhaustion_level = 0;
         send_detailed_state(c); //Sync spell slots, hunger and exhaustion with the HUD client
-        send_text_to_client(c->sock, "[SYSTEM] Meditate at the foot of the crystal monument. Your spirit is renewed, chasing away fatigue, hunger and recharging your spells!");
+        send_text_to_client(c->sock, "[SYSTEM] You meditate at the foot of the crystal monument. Your spirit is renewed, chasing away fatigue, hunger and recharging your spells!");
       } else {
         send_text_to_client(c->sock, "[ERROR] You are not near any crystal statues.");
       }
@@ -2887,6 +2887,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   }
 
   if (strcmp(cmd, "cure") == 0) {
+    /*Nothing to cure: don't take the 50gp for nothing.*/
+    if (c->effect_count <= 0) {
+      send_text_to_client(c->sock,
+          "[TEMPLE] You have no afflictions to cure.");
+      return;
+    }
     if (c->gold >= 50) {
       c->gold -= 50;
       c->effect_count = 0;
@@ -3197,9 +3203,25 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       if (tmpl->book_spell_count > 0) {
         for (int local_idx = 0; local_idx < tmpl->book_spell_count; local_idx++) {
           int global_idx = tmpl->book_seq * MAX_BOOK_SPELLS + local_idx;
-          int required_pg_level = global_idx / 3;
-          send_text_to_client(c->sock, "  [#%2d] %-25s (Req. Lv PG: %d)", 
-                              global_idx, tmpl->book_spell_names[local_idx], required_pg_level);
+          /*Same level gate the temple ritual applies to a book with an
+           * explicit spell list (spell level * 2, cantrips 1): the old
+           * global_idx / 3 estimate showed requirements of 0 and 1 for
+           * spells the ritual then reported as LOCKED.*/
+          int required_pg_level = -1;
+          for (int k = 0; k < spell_database_size; k++) {
+            if (strcasecmp(spell_database[k].name, tmpl->book_spell_names[local_idx]) == 0) {
+              int sl = spell_database[k].level;
+              required_pg_level = (sl > 0) ? (sl * 2) : 1;
+              break;
+            }
+          }
+          if (required_pg_level > 0) {
+            send_text_to_client(c->sock, "  [#%2d] %-25s (Req. PC Lv: %d)",
+                                global_idx, tmpl->book_spell_names[local_idx], required_pg_level);
+          } else {
+            send_text_to_client(c->sock, "  [#%2d] %-25s",
+                                global_idx, tmpl->book_spell_names[local_idx]);
+          }
         }
       } else {
         send_text_to_client(c->sock, "(No readable spells listed here)");
@@ -3509,7 +3531,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       int already = 0;
 
       send_text_to_client(c->sock,
-          "[RITUAL] %s... '%s' (you are in %s, Lv PG %d):",
+          "[RITUAL] %s... '%s' (you are in %s, PC Lv %d):",
           my_temple->ritual, tmpl->name, my_temple->name, pg_level);
 
       int use_ordered = (tmpl->book_spell_count > 0);
@@ -4629,9 +4651,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   }
   if (strcmp(cmd, "examine") == 0 || strcmp(cmd, "ex") == 0) {
     send_text_to_client(c->sock, "[DETAILED EXAMINATION] Area 1 step (Position %d, %d - Floor %d)", c->x, c->y, c->floor_id);
-    send_text_to_client(c->sock, "+--------+-----------------------+-------------------------------------------------------+");
-    send_text_to_client(c->sock, "| SQUARE | GROUND / WALL TYPE    | MINING POTENTIAL AND PRESENCE                         |");
-    send_text_to_client(c->sock, "+--------+-----------------------+-------------------------------------------------------+");
+    send_text_to_client(c->sock, "+--------+--------------------------+-------------------------------------------------------+");
+    send_text_to_client(c->sock, "| SQUARE | GROUND / WALL TYPE       | MINING POTENTIAL AND PRESENCE                         |");
+    send_text_to_client(c->sock, "+--------+--------------------------+-------------------------------------------------------+");
 
     int qx[] = {0, 0, 1, 1, 1, 0, -1, -1, -1};
     int qy[] = {0, -1, -1, 0, 1, 1, 1, 0, -1};
@@ -4676,11 +4698,11 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         char combined[512];
         snprintf(combined, sizeof(combined), "%s%s", v_min, presence);
         
-        send_text_to_client(c->sock, "| %-6s | %-21s | %-53s |", qnames[i], vname, combined);
+        send_text_to_client(c->sock, "| %-6s | %-24s | %-53s |", qnames[i], vname, combined);
       }
     }
     
-    send_text_to_client(c->sock, "+--------+-----------------------+-------------------------------------------------------+");
+    send_text_to_client(c->sock, "+--------+--------------------------+-------------------------------------------------------+");
     
     bool has_mining_tool = false;
     char tool_name[64] = "";

@@ -530,8 +530,23 @@ int ui_utf8_encode(uint32_t cp, char out[4]) {
     return 3;
 }
 
-static float glyph_advance(BakedSize *B, uint32_t cp, float k) {
+/*Codepoint -> baked glyph. Typographic punctuation outside the baked
+ * range (dashes, curly quotes, bullets, thin spaces used in server
+ * messages and in the item/monster descriptions of data/) is drawn with
+ * its plain equivalent instead of '?'.*/
+static uint32_t glyph_cp(const BakedSize *B, uint32_t cp) {
+    if (cp >= (uint32_t)B->first && cp < (uint32_t)(B->first + B->count)) return cp;
+    if ((cp >= 0x2010 && cp <= 0x2015) || cp == 0x2212) cp = '-';
+    else if (cp == 0x2018 || cp == 0x2019 || cp == 0x201A || cp == 0x201B || cp == 0x2032) cp = '\'';
+    else if (cp == 0x201C || cp == 0x201D || cp == 0x201E || cp == 0x2033) cp = '"';
+    else if (cp == 0x2022 || cp == 0x2219) cp = '*';
+    else if ((cp >= 0x2000 && cp <= 0x200A) || cp == 0x202F || cp == 0x00A0) cp = ' ';
     if (cp < (uint32_t)B->first || cp >= (uint32_t)(B->first + B->count)) cp = '?';
+    return cp;
+}
+
+static float glyph_advance(BakedSize *B, uint32_t cp, float k) {
+    cp = glyph_cp(B, cp);
     return B->chars[cp - B->first].xadvance * k;
 }
 
@@ -592,8 +607,7 @@ static float draw_text_impl(int font, float size, float x, float y, const char *
             s += 2;
             continue;
         }
-        uint32_t cp = utf8_next(&s);
-        if (cp < (uint32_t)B->first || cp >= (uint32_t)(B->first + B->count)) cp = '?';
+        uint32_t cp = glyph_cp(B, utf8_next(&s));
         stbtt_packedchar *pc = &B->chars[cp - B->first];
         if (cp != ' ') {
             float x0 = pen + pc->xoff * k, y0 = baseline + pc->yoff * k;
