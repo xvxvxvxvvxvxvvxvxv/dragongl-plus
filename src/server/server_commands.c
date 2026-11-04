@@ -2887,6 +2887,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   }
 
   if (strcmp(cmd, "cure") == 0) {
+    /*Nothing to cure: don't take the 50gp for nothing.*/
+    if (c->effect_count <= 0) {
+      send_text_to_client(c->sock,
+          "[TEMPLE] You have no afflictions to cure.");
+      return;
+    }
     if (c->gold >= 50) {
       c->gold -= 50;
       c->effect_count = 0;
