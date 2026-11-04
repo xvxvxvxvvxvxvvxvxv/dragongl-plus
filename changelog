@@ -1,3 +1,11 @@
+* Wed Nov 04 2026 DragonGL+ - 2026.11.04.01
+- CLIENT: dashes, curly quotes and bullets in server messages and in
+  item/monster descriptions are drawn as plain characters instead of '?'.
+- COMMANDS: "lore" shows the character level the temple ritual really
+  requires for each spell of a book (it showed 0 or 1); "cure" no longer
+  takes 50gp when there is nothing to cure.
+- TEXT: the "examine" table stays aligned on stairs and glowing mushrooms;
+  fountain and crystal statue messages reworded.
 * Sat Oct 31 2026 DragonGL+ - 2026.10.31.01
 - COMMANDS: "open <dir>" and "close <dir>" work again (they always
   answered "Unrecognized command"); "talk" away from a merchant says
