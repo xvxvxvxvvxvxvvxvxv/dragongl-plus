@@ -1983,6 +1983,14 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
           if (sec_counts[sector] > 0) strncat(sec_buf[sector], ", ", sizeof(sec_buf[sector]) - strlen(sec_buf[sector]) - 1);
           strncat(sec_buf[sector], entry, sizeof(sec_buf[sector]) - strlen(sec_buf[sector]) - 1);
           sec_counts[sector]++;
+        } else if (vt == VOXEL_GOLD_VEIN) {
+          /*VOXEL_GOLD_VEIN lies inside the crystal value range of the
+           * enum: without this branch a gold vein was listed as "Crystal".*/
+          char entry[64];
+          snprintf(entry, sizeof(entry), "Gold-Vein (%dp)", dist_steps);
+          if (sec_counts[sector] > 0) strncat(sec_buf[sector], ", ", sizeof(sec_buf[sector]) - strlen(sec_buf[sector]) - 1);
+          strncat(sec_buf[sector], entry, sizeof(sec_buf[sector]) - strlen(sec_buf[sector]) - 1);
+          sec_counts[sector]++;
         } else if (vt >= VOXEL_CRYSTAL_BLUE && vt <= VOXEL_CRYSTAL_WHITE) {
           char entry[64];
           snprintf(entry, sizeof(entry), "Crystal (%dp)", dist_steps);
@@ -2000,7 +2008,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
 
     //--- 3. TABLE OUTPUT TO CLIENT ---
-    send_text_to_client(c->sock, "[INSPECTION] Illuminated View Range: %d Steps (%d Floor)", vis_rad, f);
+    send_text_to_client(c->sock, "[INSPECTION] Illuminated View Range: %d Steps (Floor %d)", vis_rad, f);
     send_text_to_client(c->sock, "[UNDER FEET] Position (%d, %d): %s", px, py, feet_buf);
     send_text_to_client(c->sock, "+--------+-------------------------------------------------------------+");
     send_text_to_client(c->sock, "| SECTOR | DETECTIONS IN THE ILLUMINATED AREA                          |");
