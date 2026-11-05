@@ -1,3 +1,11 @@
+* Thu Nov 05 2026 DragonGL+ - 2026.11.05.01
+- TEXT: "look" lists gold veins as "Gold-Vein" instead of "Crystal" and
+  says "(Floor N)"; the "examine" table stays aligned on rock and wall
+  squares; gold bags, chests, ghosts and players no longer run into the
+  terrain name in "look"/"examine".
+- COMMANDS: "remove"/"unequip"/"takeoff" and "fill" without an argument
+  show their usage instead of "Unrecognized command"; "use "/"quaff "/
+  "read " with an empty name no longer use the first backpack item.
 * Wed Nov 04 2026 DragonGL+ - 2026.11.04.02
 - MAGIC: the 12 innate class cantrips (Ancestral Totem Call and the
   others) can be cast without a book, and old saves get them

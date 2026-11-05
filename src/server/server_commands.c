@@ -140,11 +140,11 @@ static void evaluate_digging_potential(int nx, int ny, int f, VoxelType vt, char
     unsigned int hash = (unsigned int)(nx * 73 + ny * 37 + f * 19 + 17);
     int chance = hash % 100;
     if (chance < 15) {
-      snprintf(buf, buf_size, "VERY PROSPEROUS: Silver and Quartz veins detected in the wall!");
+      snprintf(buf, buf_size, "VERY PROSPEROUS: Silver and quartz veins in the wall!");
     } else if (chance < 35) {
       snprintf(buf, buf_size, "PROSPEROUS: Traces of metallic minerals and pyrite.");
     } else {
-      snprintf(buf, buf_size, "STERILE: Ordinary hard rock. Risk of blunting the tool.");
+      snprintf(buf, buf_size, "STERILE: Ordinary hard rock, may blunt the tool.");
     }
   } else if (vt == VOXEL_MUD || vt == VOXEL_SAND || vt == VOXEL_ASH || vt == VOXEL_GRASS) {
     unsigned int hash = (unsigned int)(nx * 31 + ny * 47 + f * 13 + 5);
@@ -1852,7 +1852,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
           g_tombstones[i].floor_id == f &&
           abs(g_tombstones[i].x - px) + abs(g_tombstones[i].y - py) <= 1) {
         char tbuf[96];
-        snprintf(tbuf, sizeof(tbuf), "| [Tombstone of %s — type 'list' to inspect]",
+        snprintf(tbuf, sizeof(tbuf), " | [Tombstone of %s — type 'list' to inspect]",
                  g_tombstones[i].owner);
         strncat(feet_buf, tbuf, sizeof(feet_buf) - strlen(feet_buf) - 1);
       }
@@ -1863,12 +1863,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       if (npcs[i].active && npcs[i].floor_id == f && npcs[i].x == px && npcs[i].y == py) {
 
         if (npcs[i].archetype == ARCH_GOLD) {
-          strncat(feet_buf, "| [Golden Bag]", sizeof(feet_buf) - strlen(feet_buf) - 1);
+          strncat(feet_buf, " | [Golden Bag]", sizeof(feet_buf) - strlen(feet_buf) - 1);
         } else if (npcs[i].archetype == ARCH_TREASURE) {
-          strncat(feet_buf, "| [Treasure Chest]", sizeof(feet_buf) - strlen(feet_buf) - 1);
+          strncat(feet_buf, " | [Treasure Chest]", sizeof(feet_buf) - strlen(feet_buf) - 1);
         } else if (npcs[i].is_ghost) {
           char gbuf[64];
-          snprintf(gbuf, sizeof(gbuf), "| [%s remains]", npcs[i].custom_name);
+          snprintf(gbuf, sizeof(gbuf), " | [%s remains]", npcs[i].custom_name);
           strncat(feet_buf, gbuf, sizeof(feet_buf) - strlen(feet_buf) - 1);
         } else if (npcs[i].archetype == ARCH_MERCHANT) {
           char mbuf[64];
@@ -1887,7 +1887,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       if (g_clients[i].active && g_clients[i].authenticated && &g_clients[i] != c &&
           g_clients[i].floor_id == f && g_clients[i].x == px && g_clients[i].y == py) {
         char pbuf[64];
-        snprintf(pbuf, sizeof(pbuf), "| [Player: %s]", g_clients[i].username);
+        snprintf(pbuf, sizeof(pbuf), " | [Player: %s]", g_clients[i].username);
         strncat(feet_buf, pbuf, sizeof(feet_buf) - strlen(feet_buf) - 1);
       }
     }
@@ -1983,6 +1983,14 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
           if (sec_counts[sector] > 0) strncat(sec_buf[sector], ", ", sizeof(sec_buf[sector]) - strlen(sec_buf[sector]) - 1);
           strncat(sec_buf[sector], entry, sizeof(sec_buf[sector]) - strlen(sec_buf[sector]) - 1);
           sec_counts[sector]++;
+        } else if (vt == VOXEL_GOLD_VEIN) {
+          /*VOXEL_GOLD_VEIN lies inside the crystal value range of the
+           * enum: without this branch a gold vein was listed as "Crystal".*/
+          char entry[64];
+          snprintf(entry, sizeof(entry), "Gold-Vein (%dp)", dist_steps);
+          if (sec_counts[sector] > 0) strncat(sec_buf[sector], ", ", sizeof(sec_buf[sector]) - strlen(sec_buf[sector]) - 1);
+          strncat(sec_buf[sector], entry, sizeof(sec_buf[sector]) - strlen(sec_buf[sector]) - 1);
+          sec_counts[sector]++;
         } else if (vt >= VOXEL_CRYSTAL_BLUE && vt <= VOXEL_CRYSTAL_WHITE) {
           char entry[64];
           snprintf(entry, sizeof(entry), "Crystal (%dp)", dist_steps);
@@ -2000,7 +2008,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
 
     //--- 3. TABLE OUTPUT TO CLIENT ---
-    send_text_to_client(c->sock, "[INSPECTION] Illuminated View Range: %d Steps (%d Floor)", vis_rad, f);
+    send_text_to_client(c->sock, "[INSPECTION] Illuminated View Range: %d Steps (Floor %d)", vis_rad, f);
     send_text_to_client(c->sock, "[UNDER FEET] Position (%d, %d): %s", px, py, feet_buf);
     send_text_to_client(c->sock, "+--------+-------------------------------------------------------------+");
     send_text_to_client(c->sock, "| SECTOR | DETECTIONS IN THE ILLUMINATED AREA                          |");
@@ -2371,10 +2379,13 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
    * "t n/s/e/w/d" (tunnel north/south/...) BEFORE the tunnel handler
    * further down could see it. It now belongs to tunnel; use the full
    * words remove/unequip/takeoff for this command.*/
-  if (strncmp(cmd, "remove ", 7) == 0 || strncmp(cmd, "unequip ", 8) == 0 || strncmp(cmd, "takeoff ", 8) == 0) {
-    const char *input = strchr(cmd, ' '); if (input) input++; else return;
+  if (strncmp(cmd, "remove ", 7) == 0 || strncmp(cmd, "unequip ", 8) == 0 || strncmp(cmd, "takeoff ", 8) == 0 ||
+      strcmp(cmd, "remove") == 0 || strcmp(cmd, "unequip") == 0 || strcmp(cmd, "takeoff") == 0) {
+    const char *input = strchr(cmd, ' ');
+    input = input ? input + 1 : "";
     //An empty name matches every item (strcasestr), so "remove " used to
-    //take off whatever was in the first occupied slot.
+    //take off whatever was in the first occupied slot. The bare word
+    //("remove") used to answer "Unrecognized command".
     if (input[0] == '\0') {
       send_text_to_client(c->sock,
           "[ERROR] Specify the slot or item to remove (e.g. 'remove head').");
@@ -3240,6 +3251,10 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     return;
   }
   //fill <n> - fills a lantern using an oil (fuel) from the backpack
+  if (strcmp(cmd, "fill") == 0 || strcmp(cmd, "fill ") == 0) {
+    send_text_to_client(c->sock, "[ERROR] Specify the lantern to refill (e.g. 'fill lantern' or 'fill 2').");
+    return;
+  }
   if (strncmp(cmd, "fill ", 5) == 0) {
     const char *input = cmd + 5;
     int lantern_idx = -1;
@@ -3346,6 +3361,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     const char *input = strchr(cmd, ' ');
     if (input) {
       input++;
+      while (*input == ' ') input++;
+    }
+    /*"use " with an empty name matched the first backpack item (strcasestr
+     * with ""), so it was used/read without being asked for.*/
+    if (input && *input) {
+      //Subject given.
     } else if (is_eat_cmd) {
       /*Auto-search for food/rations in backpack if 'eat' is typed without arguments*/
       input = "ration";
@@ -4685,12 +4706,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         for (int m = 0; m < MAX_NPCS; m++) {
           if (npcs[m].active && npcs[m].x == nx && npcs[m].y == ny && npcs[m].floor_id == c->floor_id) {
             if (npcs[m].archetype == ARCH_GOLD) {
-              strncat(presence, "| [Golden Bag]", sizeof(presence) - strlen(presence) - 1);
+              strncat(presence, " | [Golden Bag]", sizeof(presence) - strlen(presence) - 1);
             } else if (npcs[m].archetype == ARCH_TREASURE) {
-              strncat(presence, "| [Treasure Chest]", sizeof(presence) - strlen(presence) - 1);
+              strncat(presence, " | [Treasure Chest]", sizeof(presence) - strlen(presence) - 1);
             } else if (npcs[m].is_ghost) {
               char gbuf[64];
-              snprintf(gbuf, sizeof(gbuf), "| [%s remains]", npcs[m].custom_name);
+              snprintf(gbuf, sizeof(gbuf), " | [%s remains]", npcs[m].custom_name);
               strncat(presence, gbuf, sizeof(presence) - strlen(presence) - 1);
             } else if (npcs[m].archetype == ARCH_MERCHANT) {
               char mbuf[64];
