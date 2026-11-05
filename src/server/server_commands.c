@@ -3361,6 +3361,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     const char *input = strchr(cmd, ' ');
     if (input) {
       input++;
+      while (*input == ' ') input++;
+    }
+    /*"use " with an empty name matched the first backpack item (strcasestr
+     * with ""), so it was used/read without being asked for.*/
+    if (input && *input) {
+      //Subject given.
     } else if (is_eat_cmd) {
       /*Auto-search for food/rations in backpack if 'eat' is typed without arguments*/
       input = "ration";
