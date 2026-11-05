@@ -2379,10 +2379,13 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
    * "t n/s/e/w/d" (tunnel north/south/...) BEFORE the tunnel handler
    * further down could see it. It now belongs to tunnel; use the full
    * words remove/unequip/takeoff for this command.*/
-  if (strncmp(cmd, "remove ", 7) == 0 || strncmp(cmd, "unequip ", 8) == 0 || strncmp(cmd, "takeoff ", 8) == 0) {
-    const char *input = strchr(cmd, ' '); if (input) input++; else return;
+  if (strncmp(cmd, "remove ", 7) == 0 || strncmp(cmd, "unequip ", 8) == 0 || strncmp(cmd, "takeoff ", 8) == 0 ||
+      strcmp(cmd, "remove") == 0 || strcmp(cmd, "unequip") == 0 || strcmp(cmd, "takeoff") == 0) {
+    const char *input = strchr(cmd, ' ');
+    input = input ? input + 1 : "";
     //An empty name matches every item (strcasestr), so "remove " used to
-    //take off whatever was in the first occupied slot.
+    //take off whatever was in the first occupied slot. The bare word
+    //("remove") used to answer "Unrecognized command".
     if (input[0] == '\0') {
       send_text_to_client(c->sock,
           "[ERROR] Specify the slot or item to remove (e.g. 'remove head').");
@@ -3248,6 +3251,10 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     return;
   }
   //fill <n> - fills a lantern using an oil (fuel) from the backpack
+  if (strcmp(cmd, "fill") == 0 || strcmp(cmd, "fill ") == 0) {
+    send_text_to_client(c->sock, "[ERROR] Specify the lantern to refill (e.g. 'fill lantern' or 'fill 2').");
+    return;
+  }
   if (strncmp(cmd, "fill ", 5) == 0) {
     const char *input = cmd + 5;
     int lantern_idx = -1;
