@@ -1852,7 +1852,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
           g_tombstones[i].floor_id == f &&
           abs(g_tombstones[i].x - px) + abs(g_tombstones[i].y - py) <= 1) {
         char tbuf[96];
-        snprintf(tbuf, sizeof(tbuf), "| [Tombstone of %s — type 'list' to inspect]",
+        snprintf(tbuf, sizeof(tbuf), " | [Tombstone of %s — type 'list' to inspect]",
                  g_tombstones[i].owner);
         strncat(feet_buf, tbuf, sizeof(feet_buf) - strlen(feet_buf) - 1);
       }
@@ -1863,12 +1863,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       if (npcs[i].active && npcs[i].floor_id == f && npcs[i].x == px && npcs[i].y == py) {
 
         if (npcs[i].archetype == ARCH_GOLD) {
-          strncat(feet_buf, "| [Golden Bag]", sizeof(feet_buf) - strlen(feet_buf) - 1);
+          strncat(feet_buf, " | [Golden Bag]", sizeof(feet_buf) - strlen(feet_buf) - 1);
         } else if (npcs[i].archetype == ARCH_TREASURE) {
-          strncat(feet_buf, "| [Treasure Chest]", sizeof(feet_buf) - strlen(feet_buf) - 1);
+          strncat(feet_buf, " | [Treasure Chest]", sizeof(feet_buf) - strlen(feet_buf) - 1);
         } else if (npcs[i].is_ghost) {
           char gbuf[64];
-          snprintf(gbuf, sizeof(gbuf), "| [%s remains]", npcs[i].custom_name);
+          snprintf(gbuf, sizeof(gbuf), " | [%s remains]", npcs[i].custom_name);
           strncat(feet_buf, gbuf, sizeof(feet_buf) - strlen(feet_buf) - 1);
         } else if (npcs[i].archetype == ARCH_MERCHANT) {
           char mbuf[64];
@@ -1887,7 +1887,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       if (g_clients[i].active && g_clients[i].authenticated && &g_clients[i] != c &&
           g_clients[i].floor_id == f && g_clients[i].x == px && g_clients[i].y == py) {
         char pbuf[64];
-        snprintf(pbuf, sizeof(pbuf), "| [Player: %s]", g_clients[i].username);
+        snprintf(pbuf, sizeof(pbuf), " | [Player: %s]", g_clients[i].username);
         strncat(feet_buf, pbuf, sizeof(feet_buf) - strlen(feet_buf) - 1);
       }
     }
@@ -4693,12 +4693,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         for (int m = 0; m < MAX_NPCS; m++) {
           if (npcs[m].active && npcs[m].x == nx && npcs[m].y == ny && npcs[m].floor_id == c->floor_id) {
             if (npcs[m].archetype == ARCH_GOLD) {
-              strncat(presence, "| [Golden Bag]", sizeof(presence) - strlen(presence) - 1);
+              strncat(presence, " | [Golden Bag]", sizeof(presence) - strlen(presence) - 1);
             } else if (npcs[m].archetype == ARCH_TREASURE) {
-              strncat(presence, "| [Treasure Chest]", sizeof(presence) - strlen(presence) - 1);
+              strncat(presence, " | [Treasure Chest]", sizeof(presence) - strlen(presence) - 1);
             } else if (npcs[m].is_ghost) {
               char gbuf[64];
-              snprintf(gbuf, sizeof(gbuf), "| [%s remains]", npcs[m].custom_name);
+              snprintf(gbuf, sizeof(gbuf), " | [%s remains]", npcs[m].custom_name);
               strncat(presence, gbuf, sizeof(presence) - strlen(presence) - 1);
             } else if (npcs[m].archetype == ARCH_MERCHANT) {
               char mbuf[64];
