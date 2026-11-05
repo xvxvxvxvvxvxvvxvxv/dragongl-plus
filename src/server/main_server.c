@@ -3303,7 +3303,7 @@ int main(int argc, char **argv) {
                   clients[i].max_hp);
             }
             server_log("AUTH", "'%s' %s", ml.username,
-                       (load_status == 1) ? "rientrato" : "new");
+                       (load_status == 1) ? "returning" : "new");
           } else if (hdr.type == MSG_MOVE && clients[i].authenticated) {
             MsgMove m;
             if (net_receive_all(clients[i].sock, &m, sizeof(MsgMove)) <= 0) {
