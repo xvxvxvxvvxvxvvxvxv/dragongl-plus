@@ -140,11 +140,11 @@ static void evaluate_digging_potential(int nx, int ny, int f, VoxelType vt, char
     unsigned int hash = (unsigned int)(nx * 73 + ny * 37 + f * 19 + 17);
     int chance = hash % 100;
     if (chance < 15) {
-      snprintf(buf, buf_size, "VERY PROSPEROUS: Silver and Quartz veins detected in the wall!");
+      snprintf(buf, buf_size, "VERY PROSPEROUS: Silver and quartz veins in the wall!");
     } else if (chance < 35) {
       snprintf(buf, buf_size, "PROSPEROUS: Traces of metallic minerals and pyrite.");
     } else {
-      snprintf(buf, buf_size, "STERILE: Ordinary hard rock. Risk of blunting the tool.");
+      snprintf(buf, buf_size, "STERILE: Ordinary hard rock, may blunt the tool.");
     }
   } else if (vt == VOXEL_MUD || vt == VOXEL_SAND || vt == VOXEL_ASH || vt == VOXEL_GRASS) {
     unsigned int hash = (unsigned int)(nx * 31 + ny * 47 + f * 13 + 5);
