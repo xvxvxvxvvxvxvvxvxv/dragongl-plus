@@ -1,3 +1,10 @@
+* Fri Nov 06 2026 DragonGL+ - 2026.11.06.01
+- COMMANDS: "drop ", "belt ", "wear "/"w " and "buy " with an empty name
+  no longer drop, belt or equip the first backpack item or buy the first
+  shop item; the bare words drop, belt, wear, wield, equip and buy show
+  their usage instead of "Unrecognized command".
+- SHOPS: "identify <name>" no longer charges 100gp for an item that is
+  already identified; the cursed-item warning is spaced correctly.
 * Thu Nov 05 2026 DragonGL+ - 2026.11.05.01
 - TEXT: "look" lists gold veins as "Gold-Vein" instead of "Crystal" and
   says "(Floor N)"; the "examine" table stays aligned on rock and wall
