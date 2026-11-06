@@ -2877,11 +2877,14 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
           target_idx = n;
       } else {
         for (int i = 0; i < c->backpack_count; i++) {
-          if (!c->backpack[i].is_identified)
-            target_idx = i;
+          if (c->backpack[i].is_identified)
+            continue;
+          /*Unidentified items only: a name that matched an item already
+           * identified (e.g. the starting book) charged another 100gp
+           * for nothing, even with an unknown item in the backpack.*/
+          target_idx = i;
           const char *iname = item_database[c->backpack[i].template_idx].name;
           if (strcasecmp(iname, arg) == 0) {
-            target_idx = i;
             break;
           }
         }
@@ -2913,7 +2916,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     if (c->backpack[target_idx].blessing == BLESS_CURSED) {
       send_text_to_client(c->sock,
           "[ALCHEMIST] *whistles softly* The item is: %s"
-          "-- WARNING: it's CURSED! Don't wear it!",
+          " -- WARNING: it's CURSED! Don't wear it!",
           id_buf);
     } else {
       send_text_to_client(c->sock,
