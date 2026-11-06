@@ -2234,8 +2234,17 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     return;
   }
 
-  if (strncmp(cmd, "wear ", 5) == 0 || strncmp(cmd, "equip ", 6) == 0 || strncmp(cmd, "wield ", 6) == 0 || strncmp(cmd, "w ", 2) == 0) {
-    const char *input = strchr(cmd, ' '); if (input) input++; else return;
+  if (strncmp(cmd, "wear ", 5) == 0 || strncmp(cmd, "equip ", 6) == 0 || strncmp(cmd, "wield ", 6) == 0 || strncmp(cmd, "w ", 2) == 0 ||
+      strcmp(cmd, "wear") == 0 || strcmp(cmd, "equip") == 0 || strcmp(cmd, "wield") == 0) {
+    const char *input = strchr(cmd, ' ');
+    input = input ? input + 1 : "";
+    while (*input == ' ') input++;
+    //An empty name matches every item (strcasestr), so "w " used to try
+    //the first backpack item; the bare word answered "Unrecognized command".
+    if (input[0] == '\0') {
+      send_text_to_client(c->sock, "[ERROR] Specify the item to wield or wear (e.g. 'w 2' or 'wear helmet').");
+      return;
+    }
     ItemInstance *t = NULL;
     int loc = -1, si = -1;
 
@@ -2480,8 +2489,15 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     return;
   }
 
-  if (strncmp(cmd, "buy ", 4) == 0) {
-    const char *input = cmd + 4;
+  if (strncmp(cmd, "buy ", 4) == 0 || strcmp(cmd, "buy") == 0) {
+    const char *input = cmd + 3;
+    while (*input == ' ') input++;
+    //An empty name matches every item (strcasestr), so "buy " used to buy
+    //the first item in the shop; the bare word answered "Unrecognized command".
+    if (input[0] == '\0') {
+      send_text_to_client(c->sock, "[ERROR] Specify the item to buy (e.g. 'buy 1' or 'buy sword'); 'list' shows the goods.");
+      return;
+    }
     //1. Look for a nearby merchant
     int m_idx = -1;
     for (int i = 0; i < MAX_NPCS; i++) {
@@ -2924,8 +2940,15 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     return;
   }
 
-  if (strncmp(cmd, "belt ", 5) == 0) {
-    const char *input = cmd + 5;
+  if (strncmp(cmd, "belt ", 5) == 0 || strcmp(cmd, "belt") == 0) {
+    const char *input = cmd + 4;
+    while (*input == ' ') input++;
+    //An empty name matches every item (strcasestr), so "belt " used to move
+    //the first backpack item; the bare word answered "Unrecognized command".
+    if (input[0] == '\0') {
+      send_text_to_client(c->sock, "[ERROR] Specify the backpack item to put on the belt (e.g. 'belt 2' or 'belt potion').");
+      return;
+    }
     int bi = -1;
     if (isdigit(input[0])) {
       int requested_idx = atoi(input) - 1;
@@ -4210,11 +4233,14 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     return;
   }
-  if (strncmp(cmd, "drop ", 5) == 0 || strncmp(cmd, "d ", 2) == 0) {
+  if (strncmp(cmd, "drop ", 5) == 0 || strncmp(cmd, "d ", 2) == 0 || strcmp(cmd, "drop") == 0) {
     const char *input = strchr(cmd, ' ');
-    if (input) {
-      input++;
-    } else {
+    input = input ? input + 1 : "";
+    while (*input == ' ') input++;
+    //An empty name matches every item (strcasestr), so "drop " used to drop
+    //the first backpack item; the bare word answered "Unrecognized command".
+    if (input[0] == '\0') {
+      send_text_to_client(c->sock, "[ERROR] Specify the item to drop (e.g. 'drop 2' or 'drop dagger').");
       return;
     }
     int found_idx = -1;
