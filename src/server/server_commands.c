@@ -4342,11 +4342,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     return;
   }
-  if (strncmp(cmd, "throw ", 6) == 0 || strncmp(cmd, "v ", 2) == 0) {
+  if (strncmp(cmd, "throw ", 6) == 0 || strncmp(cmd, "v ", 2) == 0 || strcmp(cmd, "throw") == 0) {
     const char *input = strchr(cmd, ' ');
-    if (input) {
-      input++;
-    } else {
+    input = input ? input + 1 : "";
+    while (*input == ' ') input++;
+    if (input[0] == '\0') {
+      send_text_to_client(c->sock, "[SYSTEM] Usage: throw <item> <n|s|e|w> (e.g. throw dart n)");
       return;
     }
     char item_query[64] = {0};
@@ -4363,6 +4364,14 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         send_text_to_client(c->sock, "[SYSTEM] Specify the direction. Example: throw dart n");
         return;
     }
+    //"v  e" left an empty item name, which matches every item (strcasestr),
+    //so the first backpack item was thrown without being asked for.
+    char *iq = trim_spaces(item_query);
+    if (iq[0] == '\0') {
+      send_text_to_client(c->sock, "[SYSTEM] Specify the item to throw. Example: throw dart n");
+      return;
+    }
+    memmove(item_query, iq, strlen(iq) + 1);
     
     if (dir_char != 'n' && dir_char != 's' && dir_char != 'e' && dir_char != 'w') {
         send_text_to_client(c->sock, "[SYSTEM] Invalid direction. Use: n, s, e, w (e.g. throw dart e)");
