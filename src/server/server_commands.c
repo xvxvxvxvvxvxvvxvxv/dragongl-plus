@@ -770,9 +770,14 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   }
 
   // --- TRADE SYSTEM P2P ---
-  if (strncmp(cmd, "trade ", 6) == 0) {
-      char target_name[32];
-      strncpy(target_name, cmd + 6, 31); target_name[31] = '\0';
+  if (strncmp(cmd, "trade ", 6) == 0 || strcmp(cmd, "trade") == 0) {
+      char name_buf[32];
+      strncpy(name_buf, cmd + 5, 31); name_buf[31] = '\0';
+      const char *target_name = trim_spaces(name_buf);
+      if (target_name[0] == '\0') {
+          send_text_to_client(c->sock, "[TRADE] Usage: trade <name>");
+          return;
+      }
       
       if (strcmp(c->username, target_name) == 0) {
           send_text_to_client(c->sock, "[TRADE] You cannot trade with yourself.");
@@ -969,11 +974,11 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   /*Messaggio privato: msg/tell/whisper <name> <text>*/
   {
     int pfx = 0;
-    if (strncmp(cmd, "msg ", 4) == 0)
+    if (strncmp(cmd, "msg ", 4) == 0 || strcmp(cmd, "msg") == 0)
       pfx = 3;
-    else if (strncmp(cmd, "tell ", 5) == 0)
+    else if (strncmp(cmd, "tell ", 5) == 0 || strcmp(cmd, "tell") == 0)
       pfx = 4;
-    else if (strncmp(cmd, "whisper ", 8) == 0)
+    else if (strncmp(cmd, "whisper ", 8) == 0 || strcmp(cmd, "whisper") == 0)
       pfx = 7;
 
     if (pfx > 0) {
@@ -1028,9 +1033,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
 *floor within MSG_LOCAL_RADIUS, barring blocks.*/
   {
     int pfx = 0;
-    if (strncmp(cmd, "say ", 4) == 0)
+    if (strncmp(cmd, "say ", 4) == 0 || strcmp(cmd, "say") == 0)
       pfx = 3;
-    else if (strncmp(cmd, "shout ", 6) == 0)
+    else if (strncmp(cmd, "shout ", 6) == 0 || strcmp(cmd, "shout") == 0)
       pfx = 5;
 
     if (pfx > 0) {
@@ -1090,9 +1095,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   /*block <name> — add a player to the block list.
 *Works even if the player is offline: the name comes
 *stored like this the block is valid when you return to play.*/
-  if (strncmp(cmd, "block ", 6) == 0) {
+  if (strncmp(cmd, "block ", 6) == 0 || strcmp(cmd, "block") == 0) {
     char name[32];
-    strncpy(name, cmd + 6, sizeof(name) - 1);
+    strncpy(name, cmd + 5, sizeof(name) - 1);
     name[sizeof(name) - 1] = '\0';
     char *n = trim_spaces(name);
     if (n[0] == '\0') {
@@ -1126,9 +1131,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   }
 
   /*unblock <name> — remove a player from the block list*/
-  if (strncmp(cmd, "unblock ", 8) == 0) {
+  if (strncmp(cmd, "unblock ", 8) == 0 || strcmp(cmd, "unblock") == 0) {
     char name[32];
-    strncpy(name, cmd + 8, sizeof(name) - 1);
+    strncpy(name, cmd + 7, sizeof(name) - 1);
     name[sizeof(name) - 1] = '\0';
     char *n = trim_spaces(name);
     if (n[0] == '\0') {
@@ -1165,8 +1170,14 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   }
 
   //browse <n> — inspect item description in store
-  if (strncmp(cmd, "browse ", 7) == 0) {
-    int target_item = atoi(cmd + 7) - 1;
+  if (strncmp(cmd, "browse ", 7) == 0 || strcmp(cmd, "browse") == 0) {
+    const char *arg = cmd + 6;
+    while (*arg == ' ') arg++;
+    if (arg[0] == '\0') {
+      send_text_to_client(c->sock, "[ERROR] Specify the item number to examine (e.g. 'browse 2'); 'list' shows the goods.");
+      return;
+    }
+    int target_item = atoi(arg) - 1;
     bool found = false;
     for (int i = 0; i < MAX_NPCS; i++) {
       if (npcs[i].active && npcs[i].archetype == ARCH_MERCHANT &&
@@ -2630,8 +2641,13 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     return;
   }
 
-  if (strncmp(cmd, "sell ", 5) == 0) {
-    const char *input = cmd + 5;
+  if (strncmp(cmd, "sell ", 5) == 0 || strcmp(cmd, "sell") == 0) {
+    const char *input = cmd + 4;
+    while (*input == ' ') input++;
+    if (input[0] == '\0') {
+      send_text_to_client(c->sock, "[ERROR] Specify the item to sell (e.g. 'sell 2' or 'sell dagger').");
+      return;
+    }
     int si = -1;
     if (isdigit(input[0])) {
       int requested_idx = atoi(input) - 1;
@@ -2709,8 +2725,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     return;
   }
 
-  if (strncmp(cmd, "haggle ", 7) == 0) {
-    const char *sub = cmd + 7;
+  if (strncmp(cmd, "haggle ", 7) == 0 || strcmp(cmd, "haggle") == 0) {
+    const char *sub = cmd + 6;
+    while (*sub == ' ') sub++;
     bool is_buying = (strncmp(sub, "buy ", 4) == 0);
     bool is_selling = (strncmp(sub, "sell ", 5) == 0);
 
@@ -3874,7 +3891,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   }
 
   //cast <name> or cast <book_idx> <spell_idx>
-  if (strncmp(cmd, "cast ", 5) == 0 || strncmp(cmd, "c ", 2) == 0) {
+  if (strncmp(cmd, "cast ", 5) == 0 || strncmp(cmd, "c ", 2) == 0 || strcmp(cmd, "cast") == 0) {
     //--- ACTION BLOCK FOR SILENCE ---
     if (rules_has_condition_t(c->effects, c->effect_count, COND_SILENCED)) {
       send_text_to_client(
@@ -3882,7 +3899,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       return;
     }
     const char *spell_name = strchr(cmd, ' ');
-    if (spell_name) spell_name++; else return;
+    spell_name = spell_name ? spell_name + 1 : "";
+    while (*spell_name == ' ') spell_name++;
+    if (spell_name[0] == '\0') {
+      send_text_to_client(c->sock, "[ERROR] Specify the spell to cast (e.g. 'cast Fire Bolt'); 'spells' lists the ones you know.");
+      return;
+    }
     
     //Support for "cast <book_idx> <spell_idx>" (shortcut)
     int b_idx, l_idx;
