@@ -491,6 +491,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     send_text_to_client(c->sock, "accept : Accept the exchange offer");
     send_text_to_client(c->sock, "cancel : Cancel the exchange");
 
+    send_text_to_client(c->sock, "[HELP] --- PARTY ---");
+    send_text_to_client(c->sock, "invite <name> : Invite an online player to your party");
+    send_text_to_client(c->sock, "join : Accept the last party invitation");
+    send_text_to_client(c->sock, "leave : Leave your party (the leader disbands it)");
+    send_text_to_client(c->sock, "party : List the members of your party");
+
     send_text_to_client(c->sock, "[HELP] --- MESSAGING AND SOCIAL ---");
     send_text_to_client(
         c->sock,
@@ -665,14 +671,23 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   }
 
   //--- PARTY SYSTEM ---
-  if (strncmp(cmd, "invite ", 7) == 0) {
-      char target_name[32];
-      strncpy(target_name, cmd + 7, 31); target_name[31] = '\0';
+  if (strncmp(cmd, "invite ", 7) == 0 || strcmp(cmd, "invite") == 0) {
+      char name_buf[32];
+      strncpy(name_buf, cmd + 6, 31); name_buf[31] = '\0';
+      const char *target_name = trim_spaces(name_buf);
+      if (target_name[0] == '\0') {
+          send_text_to_client(c->sock, "[PARTY] Usage: invite <name>");
+          return;
+      }
+      if (strcmp(c->username, target_name) == 0) {
+          send_text_to_client(c->sock, "[PARTY] You cannot invite yourself.");
+          return;
+      }
       bool found = false;
       for (int i = 0; i < MAX_CLIENTS; i++) {
           if (g_clients[i].active && g_clients[i].authenticated && strcmp(g_clients[i].username, target_name) == 0) {
               strncpy(g_clients[i].pending_invite, c->username, 31);
-              send_text_to_client(g_clients[i].sock, "[PARTY] %s has invited you to his party! Type 'join' to accept.", c->username);
+              send_text_to_client(g_clients[i].sock, "[PARTY] %s has invited you to their party! Type 'join' to accept.", c->username);
               send_text_to_client(c->sock, "[PARTY] Invitation sent to %s.", target_name);
               found = true;
               break;
@@ -703,7 +718,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
                   strncpy(g_clients[i].party_leader, g_clients[i].username, 31);
                   strncpy(c->party_leader, g_clients[i].username, 31);
               }
-              send_text_to_client(c->sock, "[PARTY] You have joined %s' party!", c->party_leader);
+              send_text_to_client(c->sock, "[PARTY] You have joined %s's party!", c->party_leader);
               send_text_to_client(g_clients[i].sock, "[PARTY] %s has joined the party!", c->username);
               c->pending_invite[0] = '\0';
               break;
@@ -745,7 +760,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
           send_text_to_client(c->sock, "[PARTY] You are not in any party. Create one by inviting: invite <name>");
           return;
       }
-      send_text_to_client(c->sock, "=== PARTY MEMBERS (Leaders: %s) ===", c->party_leader);
+      send_text_to_client(c->sock, "=== PARTY MEMBERS (Leader: %s) ===", c->party_leader);
       for (int i = 0; i < MAX_CLIENTS; i++) {
           if (g_clients[i].active && strcmp(g_clients[i].party_leader, c->party_leader) == 0) {
               send_text_to_client(c->sock, "- %s (Lvl %d, %d/%d HP)", g_clients[i].username, g_clients[i].level, g_clients[i].hp, g_clients[i].max_hp);
