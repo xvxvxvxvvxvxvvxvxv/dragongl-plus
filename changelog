@@ -1,3 +1,12 @@
+* Tue Nov 10 2026 DragonGL+ - 2026.11.10.01
+- COMMANDS: "throw"/"v" with an empty item name (e.g. "v  e") no longer
+  throws the first backpack item; the bare words throw, trade, invite,
+  msg/tell/whisper, say/shout, block, unblock, browse, sell, haggle and
+  cast show their usage instead of "Unrecognized command"; "cast " asks
+  for the spell instead of "Spell '' not found".
+- PARTY: you can no longer invite yourself; "invite"/"trade" ignore a
+  trailing space after the name; messages read "Bob's party" and
+  "Leader:"; "help" lists invite, join, leave and party.
 * Fri Nov 06 2026 DragonGL+ - 2026.11.06.01
 - COMMANDS: "drop ", "belt ", "wear "/"w " and "buy " with an empty name
   no longer drop, belt or equip the first backpack item or buy the first
