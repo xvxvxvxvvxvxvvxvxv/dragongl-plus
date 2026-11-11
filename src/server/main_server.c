@@ -2996,9 +2996,12 @@ int main(int argc, char **argv) {
            * on half-received bytes and desync the stream.*/
           if (net_receive_exact(clients[i].sock, &hdr, sizeof(MsgHeader)) <= 0) {
             save_player_data(&clients[i]);
+            /*Inactive before the notify: a failed send to another player
+             * must not find this dead client and notify back (see
+             * net_send_client()).*/
+            clients[i].active = false;
             notify_player_left_floor(&clients[i], clients[i].floor_id);
             net_close(clients[i].sock);
-            clients[i].active = false;
             continue;
           }
           /*Validate version+type+length BEFORE reading the payload: an
