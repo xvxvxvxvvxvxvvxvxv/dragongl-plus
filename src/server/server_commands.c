@@ -815,7 +815,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       return;
   }
   
-  if (strncmp(cmd, "offer ", 6) == 0) {
+  //Bare "offer" used to answer "Unrecognized command", and an offer
+  //without a gold amount ("offer sword") was silently ignored.
+  if (strncmp(cmd, "offer ", 6) == 0 || strcmp(cmd, "offer") == 0) {
       if (strlen(c->trading_with) == 0) {
           send_text_to_client(c->sock, "[TRADE] You are not in any trade.");
           return;
@@ -835,7 +837,11 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       
       long long gold = 0;
       int item = 0;
-      int parsed = sscanf(cmd + 6, "%lld %d", &gold, &item);
+      int parsed = sscanf(cmd + 5, "%lld %d", &gold, &item);
+      if (parsed < 1) {
+          send_text_to_client(c->sock, "[TRADE] Use: offer <gold> [backpack item number] (e.g. 'offer 100 2' or 'offer 0 2').");
+          return;
+      }
       if (parsed >= 1) {
           if (gold < 0 || c->gold < (uint64_t)gold) {
               send_text_to_client(c->sock, "[TRADE] You don't have enough gold.");
