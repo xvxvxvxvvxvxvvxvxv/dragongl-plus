@@ -62,13 +62,20 @@ bool net_send_client(int sock, const void *data, int len) {
         save_player_data(&g_clients[i]);
       server_log("NET", "send failed: disconnecting client %d ('%s')",
                  i, g_clients[i].username);
-      /*Same cleanup as the read-side disconnect path in main(): tell
-       * the other players on the floor that this one left (hp<=0
-       * removal), so its entity does not linger on their screens.*/
-      notify_player_left_floor(&g_clients[i], g_clients[i].floor_id);
+      /*Retire the slot BEFORE notifying the floor: the notify sends to
+       * the other players, and if one of those sends fails too, its own
+       * net_send_client() notifies this floor in turn. With this client
+       * still active the two dead clients kept notifying each other
+       * until the stack overflowed (seen when two players on the same
+       * floor dropped at once).*/
+      int floor_id = g_clients[i].floor_id;
       net_close(sock);
       g_clients[i].sock = -1;
       g_clients[i].active = false;
+      /*Same cleanup as the read-side disconnect path in main(): tell
+       * the other players on the floor that this one left (hp<=0
+       * removal), so its entity does not linger on their screens.*/
+      notify_player_left_floor(&g_clients[i], floor_id);
       return false;
     }
   }

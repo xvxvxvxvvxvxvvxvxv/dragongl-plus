@@ -1,3 +1,10 @@
+* Wed Nov 11 2026 DragonGL+ - 2026.11.11.01
+- SERVER: two players on the same floor losing their connection at the
+  same moment no longer crash the server (the disconnect notices kept
+  bouncing between the two dead clients until the stack overflowed).
+- COMMANDS: "train con" (and the HUD's CON button) trains Constitution
+  instead of answering "Unknown stat"; "offer" without a gold amount
+  shows its usage instead of "Unrecognized command" or nothing.
 * Tue Nov 10 2026 DragonGL+ - 2026.11.10.01
 - COMMANDS: "throw"/"v" with an empty item name (e.g. "v  e") no longer
   throws the first backpack item; the bare words throw, trade, invite,
