@@ -550,7 +550,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       int chosen = -1; //0=str, 1=dex, 2=con, 3=int, 4=wis, 5=cha
       if (strncasecmp(stat, "str", 3) == 0) chosen = 0;
       else if (strncasecmp(stat, "dex", 3) == 0) chosen = 1;
-      else if (strncasecmp(stat, "with", 3) == 0) chosen = 2;
+      /*"con" (the HUD's CON button sends "train con"): this used to
+       * compare against "with", so Constitution could never be trained.*/
+      else if (strncasecmp(stat, "con", 3) == 0) chosen = 2;
       else if (strncasecmp(stat, "int", 3) == 0) chosen = 3;
       else if (strncasecmp(stat, "wis", 3) == 0) chosen = 4;
       else if (strncasecmp(stat, "cha", 3) == 0) chosen = 5;
