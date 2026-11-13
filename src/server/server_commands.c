@@ -2445,6 +2445,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         "head", "neck", "body", "back",
         "hand_r", "hand_l", "hands", "arm_r", "arm_l", "feet"
     };
+    /*The labels 'inventory' prints for the same slots ([R.HAND ] etc.):
+     * "remove r.hand" used to answer "Item not found among those equipped".*/
+    const char *slabels[] = {
+        "head", "neck", "body", "back",
+        "r.hand", "l.hand", "hands", "r.arm", "l.arm", "feet"
+    };
     ItemInstance *target_slot = NULL;
     int scount = 10;
     //Search by slot name or item name
@@ -2452,7 +2458,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       if (sls[si2]->template_idx == -1)
         continue;
       const char *iname = item_database[sls[si2]->template_idx].name;
-      bool slot_match = (strcasecmp(input, snames[si2]) == 0);
+      bool slot_match = (strcasecmp(input, snames[si2]) == 0 ||
+                         strcasecmp(input, slabels[si2]) == 0);
       if (!slot_match) {
         if (si2 == 7 && (strcasecmp(input, "right_arm") == 0 || strcasecmp(input, "arm_r") == 0 || strcasecmp(input, "r.a") == 0)) slot_match = true;
         else if (si2 == 8 && (strcasecmp(input, "left_arm") == 0 || strcasecmp(input, "arm_l") == 0 || strcasecmp(input, "l.a") == 0)) slot_match = true;
