@@ -1,3 +1,10 @@
+* Fri Nov 13 2026 DragonGL+ - 2026.11.13.01
+- COMMANDS: the bare short aliases "w", "d", "v" and "t" show the usage
+  of wear, drop, throw and tunnel instead of "Unrecognized command";
+  "remove" also accepts the slot labels printed by "inventory" (r.hand,
+  l.hand, r.arm, l.arm).
+- DATA: the Woodcarver's tools item name no longer carries trailing
+  spaces.
 * Wed Nov 11 2026 DragonGL+ - 2026.11.11.01
 - SERVER: two players on the same floor losing their connection at the
   same moment no longer crash the server (the disconnect notices kept
