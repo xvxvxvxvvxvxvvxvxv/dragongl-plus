@@ -2269,7 +2269,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   }
 
   if (strncmp(cmd, "wear ", 5) == 0 || strncmp(cmd, "equip ", 6) == 0 || strncmp(cmd, "wield ", 6) == 0 || strncmp(cmd, "w ", 2) == 0 ||
-      strcmp(cmd, "wear") == 0 || strcmp(cmd, "equip") == 0 || strcmp(cmd, "wield") == 0) {
+      strcmp(cmd, "wear") == 0 || strcmp(cmd, "equip") == 0 || strcmp(cmd, "wield") == 0 ||
+      strcmp(cmd, "w") == 0) {
     const char *input = strchr(cmd, ' ');
     input = input ? input + 1 : "";
     while (*input == ' ') input++;
@@ -4281,7 +4282,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     return;
   }
-  if (strncmp(cmd, "drop ", 5) == 0 || strncmp(cmd, "d ", 2) == 0 || strcmp(cmd, "drop") == 0) {
+  if (strncmp(cmd, "drop ", 5) == 0 || strncmp(cmd, "d ", 2) == 0 || strcmp(cmd, "drop") == 0 ||
+      strcmp(cmd, "d") == 0) {
     const char *input = strchr(cmd, ' ');
     input = input ? input + 1 : "";
     while (*input == ' ') input++;
@@ -4387,7 +4389,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     return;
   }
-  if (strncmp(cmd, "throw ", 6) == 0 || strncmp(cmd, "v ", 2) == 0 || strcmp(cmd, "throw") == 0) {
+  if (strncmp(cmd, "throw ", 6) == 0 || strncmp(cmd, "v ", 2) == 0 || strcmp(cmd, "throw") == 0 ||
+      strcmp(cmd, "v") == 0) {
     const char *input = strchr(cmd, ' ');
     input = input ? input + 1 : "";
     while (*input == ' ') input++;
@@ -4861,7 +4864,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   }
   /*"t " (lowercase) is the short alias for tunnel directions: 't n' =
    * tunnel north. It used to be stolen by the takeoff handler above.*/
-  if (strncmp(cmd, "tunnel ", 7) == 0 || strncmp(cmd, "T ", 2) == 0 || strncmp(cmd, "t ", 2) == 0 || strcmp(cmd, "tunnel") == 0 || strcmp(cmd, "T") == 0) {
+  if (strncmp(cmd, "tunnel ", 7) == 0 || strncmp(cmd, "T ", 2) == 0 || strncmp(cmd, "t ", 2) == 0 || strcmp(cmd, "tunnel") == 0 || strcmp(cmd, "T") == 0 || strcmp(cmd, "t") == 0) {
     const char *dir_str = strchr(cmd, ' ');
     if (!dir_str) {
       send_text_to_client(c->sock, "[SYSTEM] Use: tunnel <n|s|e|w> or 'tunnel d' (down/under your feet)");
