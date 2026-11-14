@@ -426,8 +426,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   server_log("CMD", "%s: %s", c->username, cmd);
   if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
     send_text_to_client(c->sock, "[HELP] --- BASIC COMMANDS ---");
-    send_text_to_client(c->sock, "  l, look         : Observe the surrounding environment");
-    send_text_to_client(c->sock, "  ex, examine     : Examine terrain and minerals 1 step away");
+    send_text_to_client(c->sock, "l, look : Observe the surrounding environment");
+    send_text_to_client(c->sock, "ex, examine : Examine terrain and minerals 1 step away");
     send_text_to_client(c->sock, "stats : Shows the character's statistics");
     send_text_to_client(c->sock, "s, search : Search for secret passages or traps");
     send_text_to_client(c->sock, "train <stat> : Use level up stat points (e.g. train str / random)");
@@ -442,7 +442,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     
     send_text_to_client(c->sock, "[HELP] --- ITEMS AND INVENTORY ---");
     send_text_to_client(c->sock, "i, inventory : Show inventory");
-    send_text_to_client(c->sock, "  w, wield/wear   : Wield/wear an item (e.g. 'w 2')");
+    send_text_to_client(c->sock, "w, wield/wear <n> : Wield/wear an item (e.g. 'w 2')");
     send_text_to_client(c->sock, "remove/unequip/takeoff <slot|item> : Remove equipped or belted item");
     send_text_to_client(c->sock, "belt <n> : Move an item from the backpack to the speed belt");
     send_text_to_client(c->sock, "unbelt <n> : Move an item from the belt to the backpack");
@@ -451,7 +451,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     send_text_to_client(c->sock, "fill <n> : Refills a lantern with oil (e.g. 'fill lantern')");
     send_text_to_client(c->sock, "use <n> : Use an item (potions, food, wands)");
     send_text_to_client(c->sock, "q, quaff <n> : Drink a potion (alias for 'use')");
-    send_text_to_client(c->sock, "  r, read <n>     : Read book/scroll (e.g. 'read 1')");
+    send_text_to_client(c->sock, "r, read <n> : Read book/scroll (e.g. 'read 1')");
     send_text_to_client(c->sock, "e, eat <n> : Eat food (alias for 'use')");
     send_text_to_client(c->sock, "z, zap <n> : Use wand (alias for 'use')");
 
@@ -466,17 +466,17 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     send_text_to_client(c->sock, "celebrate <n> : Learn magic (Paladin)");
     send_text_to_client(c->sock, "pronounce <n> : Learn magic (Sorcerer)");
     send_text_to_client(c->sock, "practice <n> : Learn magic (Ranger)");
-    send_text_to_client(c->sock, "  drill <n>       : Execute maneuvers (Fighter)");
+    send_text_to_client(c->sock, "drill <n> : Execute maneuvers (Fighter)");
     send_text_to_client(c->sock, "rage <n> : Channel fury (Barbarian)");
-    send_text_to_client(c->sock, "  sneak <n>       : Hone shadows (Rogue)");
-    send_text_to_client(c->sock, "  meditate <n>    : Learn disciplines (Monk)");
+    send_text_to_client(c->sock, "sneak <n> : Hone shadows (Rogue)");
+    send_text_to_client(c->sock, "meditate <n> : Learn disciplines (Monk)");
     send_text_to_client(c->sock, "lore <n> : Examine a book or inventory item");
     send_text_to_client(c->sock, "cure : Cure diseases/poisons at the temple (cost: gold)");
     send_text_to_client(c->sock, "uncurse : Remove curses from the temple (cost: gold)");
     send_text_to_client(c->sock, "retrieve : Retrieve your items and soul from your ghost");
     
     send_text_to_client(c->sock, "[HELP] --- INTERACTIONS WITH NPCs AND STORES ---");
-    send_text_to_client(c->sock, "  talk            : Talk with nearby merchant or NPC");
+    send_text_to_client(c->sock, "talk : Talk with nearby merchant or NPC");
     send_text_to_client(c->sock, "list : Show goods for sale");
     send_text_to_client(c->sock, "browse <n> : Examine an item for sale");
     send_text_to_client(c->sock, "buy <n> : Buys the item for sale (e.g. 'buy sword')");
@@ -487,7 +487,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     
     send_text_to_client(c->sock, "[HELP] --- TRADE BETWEEN PLAYERS ---");
     send_text_to_client(c->sock, "trade <name> : Request to trade with a nearby player");
-    send_text_to_client(c->sock, "offer <gold> [id]: Offer gold and/or an item (from your backpack)");
+    send_text_to_client(c->sock, "offer <gold> [id] : Offer gold and/or an item (from your backpack)");
     send_text_to_client(c->sock, "accept : Accept the exchange offer");
     send_text_to_client(c->sock, "cancel : Cancel the exchange");
 
@@ -518,17 +518,17 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
 
     if (c->is_dm) {
         send_text_to_client(c->sock, "[DM] --- MASTER COMMANDS ---");
-        send_text_to_client(c->sock, "  dm_spawn <id> <x> <y> : Spawn entity/monster");
+        send_text_to_client(c->sock, "dm_spawn <id> <x> <y> : Spawn entity/monster");
         send_text_to_client(c->sock, "dm_goto <fl> <x> <y> : Teleport (fl = floor)");
         send_text_to_client(c->sock, "dm_find_monster <id> : Search for the monster");
-        send_text_to_client(c->sock, "  dm_find_item <id>     : Search for an item");
+        send_text_to_client(c->sock, "dm_find_item <id> : Search for an item");
         send_text_to_client(c->sock, "dm_pdf <text> : Generate PDF (Lore/Log)");
         send_text_to_client(c->sock, "dm_mapfloor : Generate color PDF of the current floor");
-        send_text_to_client(c->sock, "dm_shop : Spawns a custom merchant");
-        send_text_to_client(c->sock, "  dm_place <id>         : Place world object (furniture)");
+        send_text_to_client(c->sock, "dm_shop <id> [qty] : Add an item to a nearby merchant's stock");
+        send_text_to_client(c->sock, "dm_place <id> <x> <y> : Place world object (furniture)");
         send_text_to_client(c->sock, "dm_gold <amt> : Add/remove gold coins");
         send_text_to_client(c->sock, "dm_level <lvl> : Increase level up to lvl (max 20)");
-        send_text_to_client(c->sock, "  dm_telemetry          : Show server metrics (RAM/CPU)");
+        send_text_to_client(c->sock, "dm_telemetry : Show server metrics (RAM/CPU)");
         send_text_to_client(c->sock, "dm_boss <floor> : Locate bosses on the indicated floor (stats+loot)");
     }
     return;
@@ -1219,7 +1219,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       } else {
           c->gold += amount;
       }
-      send_text_to_client(c->sock, "[DM] %lld's updated gold. Total: %llu", amount, (unsigned long long)c->gold);
+      send_text_to_client(c->sock, "[DM] Gold changed by %+lld. Total: %llu gp", amount, (unsigned long long)c->gold);
       return;
     }
     if (strncmp(cmd, "dm_level ", 9) == 0) {
@@ -2269,7 +2269,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   }
 
   if (strncmp(cmd, "wear ", 5) == 0 || strncmp(cmd, "equip ", 6) == 0 || strncmp(cmd, "wield ", 6) == 0 || strncmp(cmd, "w ", 2) == 0 ||
-      strcmp(cmd, "wear") == 0 || strcmp(cmd, "equip") == 0 || strcmp(cmd, "wield") == 0) {
+      strcmp(cmd, "wear") == 0 || strcmp(cmd, "equip") == 0 || strcmp(cmd, "wield") == 0 ||
+      strcmp(cmd, "w") == 0) {
     const char *input = strchr(cmd, ' ');
     input = input ? input + 1 : "";
     while (*input == ' ') input++;
@@ -2444,6 +2445,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         "head", "neck", "body", "back",
         "hand_r", "hand_l", "hands", "arm_r", "arm_l", "feet"
     };
+    /*The labels 'inventory' prints for the same slots ([R.HAND ] etc.):
+     * "remove r.hand" used to answer "Item not found among those equipped".*/
+    const char *slabels[] = {
+        "head", "neck", "body", "back",
+        "r.hand", "l.hand", "hands", "r.arm", "l.arm", "feet"
+    };
     ItemInstance *target_slot = NULL;
     int scount = 10;
     //Search by slot name or item name
@@ -2451,7 +2458,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       if (sls[si2]->template_idx == -1)
         continue;
       const char *iname = item_database[sls[si2]->template_idx].name;
-      bool slot_match = (strcasecmp(input, snames[si2]) == 0);
+      bool slot_match = (strcasecmp(input, snames[si2]) == 0 ||
+                         strcasecmp(input, slabels[si2]) == 0);
       if (!slot_match) {
         if (si2 == 7 && (strcasecmp(input, "right_arm") == 0 || strcasecmp(input, "arm_r") == 0 || strcasecmp(input, "r.a") == 0)) slot_match = true;
         else if (si2 == 8 && (strcasecmp(input, "left_arm") == 0 || strcasecmp(input, "arm_l") == 0 || strcasecmp(input, "l.a") == 0)) slot_match = true;
@@ -3431,11 +3439,17 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     /*"use " with an empty name matched the first backpack item (strcasestr
      * with ""), so it was used/read without being asked for.*/
+    bool auto_eat = false;
     if (input && *input) {
       //Subject given.
     } else if (is_eat_cmd) {
-      /*Auto-search for food/rations in backpack if 'eat' is typed without arguments*/
-      input = "ration";
+      auto_eat = true;
+      /*Auto-search for food/rations in backpack if 'eat' is typed without
+       * arguments. "Rations", not "ration": the shorter word also matched
+       * "Ring of Regeneration", "Ioun Stone of Regeneration" and "Sonatas
+       * of Inspiration", so a bare 'eat' could pick one of those instead
+       * of the food.*/
+      input = "Rations";
     } else {
       send_text_to_client(c->sock, "[ERROR] Specify the subject (e.g. 'use 1' or 'study book').");
       return;
@@ -3511,9 +3525,14 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
 
     if (found_idx == -1) {
-      send_text_to_client(c->sock,
-                          "[ERROR] Item not found in inventory (use "
-                          "name or number).");
+      if (auto_eat)
+        send_text_to_client(c->sock,
+                            "[ERROR] You have no rations to eat (use "
+                            "'eat <n>' or 'eat <name>').");
+      else
+        send_text_to_client(c->sock,
+                            "[ERROR] Item not found in inventory (use "
+                            "name or number).");
       return;
     }
 
@@ -4281,7 +4300,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     return;
   }
-  if (strncmp(cmd, "drop ", 5) == 0 || strncmp(cmd, "d ", 2) == 0 || strcmp(cmd, "drop") == 0) {
+  if (strncmp(cmd, "drop ", 5) == 0 || strncmp(cmd, "d ", 2) == 0 || strcmp(cmd, "drop") == 0 ||
+      strcmp(cmd, "d") == 0) {
     const char *input = strchr(cmd, ' ');
     input = input ? input + 1 : "";
     while (*input == ' ') input++;
@@ -4387,7 +4407,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     return;
   }
-  if (strncmp(cmd, "throw ", 6) == 0 || strncmp(cmd, "v ", 2) == 0 || strcmp(cmd, "throw") == 0) {
+  if (strncmp(cmd, "throw ", 6) == 0 || strncmp(cmd, "v ", 2) == 0 || strcmp(cmd, "throw") == 0 ||
+      strcmp(cmd, "v") == 0) {
     const char *input = strchr(cmd, ' ');
     input = input ? input + 1 : "";
     while (*input == ' ') input++;
@@ -4861,7 +4882,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   }
   /*"t " (lowercase) is the short alias for tunnel directions: 't n' =
    * tunnel north. It used to be stolen by the takeoff handler above.*/
-  if (strncmp(cmd, "tunnel ", 7) == 0 || strncmp(cmd, "T ", 2) == 0 || strncmp(cmd, "t ", 2) == 0 || strcmp(cmd, "tunnel") == 0 || strcmp(cmd, "T") == 0) {
+  if (strncmp(cmd, "tunnel ", 7) == 0 || strncmp(cmd, "T ", 2) == 0 || strncmp(cmd, "t ", 2) == 0 || strcmp(cmd, "tunnel") == 0 || strcmp(cmd, "T") == 0 || strcmp(cmd, "t") == 0) {
     const char *dir_str = strchr(cmd, ' ');
     if (!dir_str) {
       send_text_to_client(c->sock, "[SYSTEM] Use: tunnel <n|s|e|w> or 'tunnel d' (down/under your feet)");
