@@ -487,7 +487,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     
     send_text_to_client(c->sock, "[HELP] --- TRADE BETWEEN PLAYERS ---");
     send_text_to_client(c->sock, "trade <name> : Request to trade with a nearby player");
-    send_text_to_client(c->sock, "offer <gold> [id]: Offer gold and/or an item (from your backpack)");
+    send_text_to_client(c->sock, "offer <gold> [id] : Offer gold and/or an item (from your backpack)");
     send_text_to_client(c->sock, "accept : Accept the exchange offer");
     send_text_to_client(c->sock, "cancel : Cancel the exchange");
 
@@ -524,7 +524,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         send_text_to_client(c->sock, "dm_find_item <id> : Search for an item");
         send_text_to_client(c->sock, "dm_pdf <text> : Generate PDF (Lore/Log)");
         send_text_to_client(c->sock, "dm_mapfloor : Generate color PDF of the current floor");
-        send_text_to_client(c->sock, "dm_shop : Spawns a custom merchant");
+        send_text_to_client(c->sock, "dm_shop <id> [qty] : Add an item to a nearby merchant's stock");
         send_text_to_client(c->sock, "dm_place <id> <x> <y> : Place world object (furniture)");
         send_text_to_client(c->sock, "dm_gold <amt> : Add/remove gold coins");
         send_text_to_client(c->sock, "dm_level <lvl> : Increase level up to lvl (max 20)");
