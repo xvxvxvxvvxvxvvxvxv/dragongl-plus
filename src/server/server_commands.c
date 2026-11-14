@@ -426,8 +426,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
   server_log("CMD", "%s: %s", c->username, cmd);
   if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
     send_text_to_client(c->sock, "[HELP] --- BASIC COMMANDS ---");
-    send_text_to_client(c->sock, "  l, look         : Observe the surrounding environment");
-    send_text_to_client(c->sock, "  ex, examine     : Examine terrain and minerals 1 step away");
+    send_text_to_client(c->sock, "l, look : Observe the surrounding environment");
+    send_text_to_client(c->sock, "ex, examine : Examine terrain and minerals 1 step away");
     send_text_to_client(c->sock, "stats : Shows the character's statistics");
     send_text_to_client(c->sock, "s, search : Search for secret passages or traps");
     send_text_to_client(c->sock, "train <stat> : Use level up stat points (e.g. train str / random)");
@@ -442,7 +442,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     
     send_text_to_client(c->sock, "[HELP] --- ITEMS AND INVENTORY ---");
     send_text_to_client(c->sock, "i, inventory : Show inventory");
-    send_text_to_client(c->sock, "  w, wield/wear   : Wield/wear an item (e.g. 'w 2')");
+    send_text_to_client(c->sock, "w, wield/wear <n> : Wield/wear an item (e.g. 'w 2')");
     send_text_to_client(c->sock, "remove/unequip/takeoff <slot|item> : Remove equipped or belted item");
     send_text_to_client(c->sock, "belt <n> : Move an item from the backpack to the speed belt");
     send_text_to_client(c->sock, "unbelt <n> : Move an item from the belt to the backpack");
@@ -451,7 +451,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     send_text_to_client(c->sock, "fill <n> : Refills a lantern with oil (e.g. 'fill lantern')");
     send_text_to_client(c->sock, "use <n> : Use an item (potions, food, wands)");
     send_text_to_client(c->sock, "q, quaff <n> : Drink a potion (alias for 'use')");
-    send_text_to_client(c->sock, "  r, read <n>     : Read book/scroll (e.g. 'read 1')");
+    send_text_to_client(c->sock, "r, read <n> : Read book/scroll (e.g. 'read 1')");
     send_text_to_client(c->sock, "e, eat <n> : Eat food (alias for 'use')");
     send_text_to_client(c->sock, "z, zap <n> : Use wand (alias for 'use')");
 
@@ -466,17 +466,17 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     send_text_to_client(c->sock, "celebrate <n> : Learn magic (Paladin)");
     send_text_to_client(c->sock, "pronounce <n> : Learn magic (Sorcerer)");
     send_text_to_client(c->sock, "practice <n> : Learn magic (Ranger)");
-    send_text_to_client(c->sock, "  drill <n>       : Execute maneuvers (Fighter)");
+    send_text_to_client(c->sock, "drill <n> : Execute maneuvers (Fighter)");
     send_text_to_client(c->sock, "rage <n> : Channel fury (Barbarian)");
-    send_text_to_client(c->sock, "  sneak <n>       : Hone shadows (Rogue)");
-    send_text_to_client(c->sock, "  meditate <n>    : Learn disciplines (Monk)");
+    send_text_to_client(c->sock, "sneak <n> : Hone shadows (Rogue)");
+    send_text_to_client(c->sock, "meditate <n> : Learn disciplines (Monk)");
     send_text_to_client(c->sock, "lore <n> : Examine a book or inventory item");
     send_text_to_client(c->sock, "cure : Cure diseases/poisons at the temple (cost: gold)");
     send_text_to_client(c->sock, "uncurse : Remove curses from the temple (cost: gold)");
     send_text_to_client(c->sock, "retrieve : Retrieve your items and soul from your ghost");
     
     send_text_to_client(c->sock, "[HELP] --- INTERACTIONS WITH NPCs AND STORES ---");
-    send_text_to_client(c->sock, "  talk            : Talk with nearby merchant or NPC");
+    send_text_to_client(c->sock, "talk : Talk with nearby merchant or NPC");
     send_text_to_client(c->sock, "list : Show goods for sale");
     send_text_to_client(c->sock, "browse <n> : Examine an item for sale");
     send_text_to_client(c->sock, "buy <n> : Buys the item for sale (e.g. 'buy sword')");
@@ -518,17 +518,17 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
 
     if (c->is_dm) {
         send_text_to_client(c->sock, "[DM] --- MASTER COMMANDS ---");
-        send_text_to_client(c->sock, "  dm_spawn <id> <x> <y> : Spawn entity/monster");
+        send_text_to_client(c->sock, "dm_spawn <id> <x> <y> : Spawn entity/monster");
         send_text_to_client(c->sock, "dm_goto <fl> <x> <y> : Teleport (fl = floor)");
         send_text_to_client(c->sock, "dm_find_monster <id> : Search for the monster");
-        send_text_to_client(c->sock, "  dm_find_item <id>     : Search for an item");
+        send_text_to_client(c->sock, "dm_find_item <id> : Search for an item");
         send_text_to_client(c->sock, "dm_pdf <text> : Generate PDF (Lore/Log)");
         send_text_to_client(c->sock, "dm_mapfloor : Generate color PDF of the current floor");
         send_text_to_client(c->sock, "dm_shop : Spawns a custom merchant");
-        send_text_to_client(c->sock, "  dm_place <id>         : Place world object (furniture)");
+        send_text_to_client(c->sock, "dm_place <id> <x> <y> : Place world object (furniture)");
         send_text_to_client(c->sock, "dm_gold <amt> : Add/remove gold coins");
         send_text_to_client(c->sock, "dm_level <lvl> : Increase level up to lvl (max 20)");
-        send_text_to_client(c->sock, "  dm_telemetry          : Show server metrics (RAM/CPU)");
+        send_text_to_client(c->sock, "dm_telemetry : Show server metrics (RAM/CPU)");
         send_text_to_client(c->sock, "dm_boss <floor> : Locate bosses on the indicated floor (stats+loot)");
     }
     return;
@@ -1219,7 +1219,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       } else {
           c->gold += amount;
       }
-      send_text_to_client(c->sock, "[DM] %lld's updated gold. Total: %llu", amount, (unsigned long long)c->gold);
+      send_text_to_client(c->sock, "[DM] Gold changed by %+lld. Total: %llu gp", amount, (unsigned long long)c->gold);
       return;
     }
     if (strncmp(cmd, "dm_level ", 9) == 0) {
