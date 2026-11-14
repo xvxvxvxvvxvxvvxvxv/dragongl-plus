@@ -3439,11 +3439,17 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     /*"use " with an empty name matched the first backpack item (strcasestr
      * with ""), so it was used/read without being asked for.*/
+    bool auto_eat = false;
     if (input && *input) {
       //Subject given.
     } else if (is_eat_cmd) {
-      /*Auto-search for food/rations in backpack if 'eat' is typed without arguments*/
-      input = "ration";
+      auto_eat = true;
+      /*Auto-search for food/rations in backpack if 'eat' is typed without
+       * arguments. "Rations", not "ration": the shorter word also matched
+       * "Ring of Regeneration", "Ioun Stone of Regeneration" and "Sonatas
+       * of Inspiration", so a bare 'eat' could pick one of those instead
+       * of the food.*/
+      input = "Rations";
     } else {
       send_text_to_client(c->sock, "[ERROR] Specify the subject (e.g. 'use 1' or 'study book').");
       return;
@@ -3519,9 +3525,14 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
 
     if (found_idx == -1) {
-      send_text_to_client(c->sock,
-                          "[ERROR] Item not found in inventory (use "
-                          "name or number).");
+      if (auto_eat)
+        send_text_to_client(c->sock,
+                            "[ERROR] You have no rations to eat (use "
+                            "'eat <n>' or 'eat <name>').");
+      else
+        send_text_to_client(c->sock,
+                            "[ERROR] Item not found in inventory (use "
+                            "name or number).");
       return;
     }
 
