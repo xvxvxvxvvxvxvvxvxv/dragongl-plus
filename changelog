@@ -1,3 +1,12 @@
+* Sat Nov 14 2026 DragonGL+ - 2026.11.14.01
+- COMMANDS: a bare "eat"/"e" eats your rations instead of picking a
+  Ring or Ioun Stone of Regeneration or the Sonatas of Inspiration
+  (their names contain "ration"), and says "You have no rations to
+  eat" when there are none.
+- TEXT: every "help" line uses the same "command : description" layout;
+  wear and dm_place show their arguments, dm_shop describes what it
+  does, and dm_gold answers "Gold changed by +N" instead of "N's
+  updated gold".
 * Fri Nov 13 2026 DragonGL+ - 2026.11.13.01
 - COMMANDS: the bare short aliases "w", "d", "v" and "t" show the usage
   of wear, drop, throw and tunnel instead of "Unrecognized command";
