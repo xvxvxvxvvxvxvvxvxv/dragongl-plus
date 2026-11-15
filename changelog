@@ -1,3 +1,8 @@
+* Sun Nov 15 2026 DragonGL+ - 2026.11.15.01
+- COMMANDS: a bare "pray" (and the HUD's Pray button) sacrifices 100 XP
+  to restore HP, as "p" already did, instead of answering "Specify the
+  subject"; "pray <n>" is still the Cleric ritual. The reply shows the
+  HP actually restored, and "help" lists p/pray.
 * Sat Nov 14 2026 DragonGL+ - 2026.11.14.01
 - COMMANDS: a bare "eat"/"e" eats your rations instead of picking a
   Ring or Ioun Stone of Regeneration or the Sonatas of Inspiration
