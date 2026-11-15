@@ -436,6 +436,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     send_text_to_client(c->sock, "close <dir> : Close an open door");
     send_text_to_client(c->sock, "D, disarm : Disarm a trap");
     send_text_to_client(c->sock, "R, rest : Rest to recover HP/Mana");
+    send_text_to_client(c->sock, "p, pray : Sacrifice 100 XP to the gods to restore 25%% of your HP");
     send_text_to_client(c->sock, "fountain : Drink from the sacred fountain to heal wounds (Floor 0)");
     send_text_to_client(c->sock, "statue/crystal : Meditate at the crystal statues (Floor 0)");
     send_text_to_client(c->sock, "save : Save the game");
@@ -3419,7 +3420,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       || is_eat_cmd || strncmp(cmd, "zap", 3) == 0 || strcmp(cmd, "z") == 0 || strncmp(cmd, "z ", 2) == 0
       /*--- Learning Ritual Commands ---*/
       || strncmp(cmd, "study",      5) == 0
-      || strncmp(cmd, "pray",       4) == 0
+      /*bare "pray" (the HUD's Pray button) is the XP sacrifice below,
+       * not the Cleric ritual, which always names a book*/
+      || (strncmp(cmd, "pray",      4) == 0 && strcmp(cmd, "pray") != 0)
       || strncmp(cmd, "awaken",     6) == 0
       || strncmp(cmd, "invoke",     6) == 0
       || strncmp(cmd, "intone",     6) == 0
@@ -4774,8 +4777,10 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     if (c->xp >= 100) {
       c->xp -= 100;
       int heal = c->max_hp / 4;
+      int before = c->hp;
       c->hp += heal;
       if (c->hp > c->max_hp) c->hp = c->max_hp;
+      heal = c->hp > before ? c->hp - before : 0; //what was actually restored (capped at max HP)
       send_detailed_state(c); //Sync HP and XP with the HUD client
       send_text_to_client(c->sock, "[SYSTEM] You pray hard, sacrificing 100 XP. Restores %d HP (HP: %d/%d).", heal, c->hp, c->max_hp);
     } else {
