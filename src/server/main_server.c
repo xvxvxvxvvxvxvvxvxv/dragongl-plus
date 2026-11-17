@@ -2347,7 +2347,7 @@ void check_level_up(Client *c) {
 
     c->unspent_stat_points += 3;
 
-    send_text_to_client(c->sock, "[LEVEL] *** YOU HAVE RISE TO LEVEL %d! ***",
+    send_text_to_client(c->sock, "[LEVEL] *** YOU HAVE RISEN TO LEVEL %d! ***",
                         c->level);
     send_text_to_client(c->sock,
                         "[LEVEL] Maximum HP increased by %d (Total: %d). "

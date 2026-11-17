@@ -523,10 +523,10 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         send_text_to_client(c->sock, "dm_goto <fl> <x> <y> : Teleport (fl = floor)");
         send_text_to_client(c->sock, "dm_find_monster <id> : Search for the monster");
         send_text_to_client(c->sock, "dm_find_item <id> : Search for an item");
-        send_text_to_client(c->sock, "dm_pdf <text> : Generate PDF (Lore/Log)");
+        send_text_to_client(c->sock, "dm_pdf <floor> : Generate color PDF map of a floor");
         send_text_to_client(c->sock, "dm_mapfloor : Generate color PDF of the current floor");
         send_text_to_client(c->sock, "dm_shop <id> [qty] : Add an item to a nearby merchant's stock");
-        send_text_to_client(c->sock, "dm_place <id> <x> <y> : Place world object (furniture)");
+        send_text_to_client(c->sock, "dm_place <id> <x> <y> : Place a treasure chest holding item <id>");
         send_text_to_client(c->sock, "dm_gold <amt> : Add/remove gold coins");
         send_text_to_client(c->sock, "dm_level <lvl> : Increase level up to lvl (max 20)");
         send_text_to_client(c->sock, "dm_telemetry : Show server metrics (RAM/CPU)");
@@ -1632,12 +1632,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
             }
           }
           send_text_to_client(c->sock, "[DM] ERROR: No free NPC slots.");
-        } else {
-          send_text_to_client(c->sock,
-              "[DM] Use: dm_spawn <bestiary_id> <x 0-%d> <y 0-%d>",
-              MAP_WIDTH - 1, MAP_HEIGHT - 1);
+          return;
         }
       }
+      send_text_to_client(c->sock,
+          "[DM] Use: dm_spawn <bestiary_id> <x 0-%d> <y 0-%d>",
+          MAP_WIDTH - 1, MAP_HEIGHT - 1);
       return;
     }
     if (strncmp(cmd, "dm_goto ", 8) == 0) {
@@ -1671,20 +1671,25 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
           broadcast_nearby_entities(c, npcs);
           return;
         }
-        send_text_to_client(c->sock,
-            "[DM] Out of bounds. Use: dm_goto <floor 0-%d> <x 0-%d> <y 0-%d>",
-            MAX_FLOORS - 1, MAP_WIDTH - 1, MAP_HEIGHT - 1);
       }
+      send_text_to_client(c->sock,
+          "[DM] Use: dm_goto <floor 0-%d> <x 0-%d> <y 0-%d>",
+          MAX_FLOORS - 1, MAP_WIDTH - 1, MAP_HEIGHT - 1);
+      return;
     }
     if (strncmp(cmd, "dm_pdf ", 7) == 0) {
       int f = 0;
-      if (sscanf(cmd + 7, "%d", &f) == 1 && f >= 0 && f < 100) {
+      if (sscanf(cmd + 7, "%d", &f) == 1 && f >= 0 && f < MAX_FLOORS) {
         if (dump_floor_v2("map_dump.txt", f, c) == 0) {
           char pdf_path[128];
           snprintf(pdf_path, sizeof(pdf_path), "map_floor_%d.pdf", f);
           run_pdf_map_generator(c->sock, "map_dump.txt", pdf_path, f);
+        } else {
+          send_text_to_client(c->sock, "[DM] Error opening temporary file.");
         }
+        return;
       }
+      send_text_to_client(c->sock, "[DM] Use: dm_pdf <floor 0-%d>", MAX_FLOORS - 1);
       return;
     }
     if (strcmp(cmd, "dm_mapfloor") == 0) {
@@ -1702,19 +1707,34 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     if (strncmp(cmd, "dm_shop ", 8) == 0) {
       int iid = 0, qty = 1;
-      if (sscanf(cmd + 8, "%d %d", &iid, &qty) >= 1) {
-        for (int i = 0; i < MAX_NPCS; i++) {
-          if (npcs[i].active && npcs[i].archetype == ARCH_MERCHANT &&
-              npcs[i].floor_id == c->floor_id) {
-            if (abs(npcs[i].x - c->x) + abs(npcs[i].y - c->y) <= 5) {
-              add_item_to_shop(&npcs[i], iid, qty);
-              send_text_to_client(c->sock, "[DM] Added item %d (qty %d) to %s",
-                                  iid, qty, npcs[i].merchant.shop_name);
+      /*The id is stored as-is in the merchant's stock (and saved with
+       * the NPCs): an id outside item_database crashed the server on the
+       * next 'list' at that shop, and again after every restart.*/
+      if (sscanf(cmd + 8, "%d %d", &iid, &qty) < 1 ||
+          iid < 0 || iid >= item_database_size || qty < 1) {
+        send_text_to_client(c->sock,
+            "[DM] Use: dm_shop <item_id 0-%d> [qty >= 1] ('dm_find_item <name>' shows the ids)",
+            item_database_size - 1);
+        return;
+      }
+      for (int i = 0; i < MAX_NPCS; i++) {
+        if (npcs[i].active && npcs[i].archetype == ARCH_MERCHANT &&
+            npcs[i].floor_id == c->floor_id) {
+          if (abs(npcs[i].x - c->x) + abs(npcs[i].y - c->y) <= 5) {
+            if (npcs[i].merchant.item_count >= MAX_SHOP_ITEMS) {
+              send_text_to_client(c->sock, "[DM] %s is full (%d items).",
+                                  npcs[i].merchant.shop_name, MAX_SHOP_ITEMS);
               return;
             }
+            add_item_to_shop(&npcs[i], iid, qty);
+            send_text_to_client(c->sock, "[DM] Added %s (qty %d) to %s",
+                                item_database[iid].name, qty,
+                                npcs[i].merchant.shop_name);
+            return;
           }
         }
       }
+      send_text_to_client(c->sock, "[DM] No merchant nearby (within 5 steps).");
       return;
     }
     if (strncmp(cmd, "dm_place ", 9) == 0) {
@@ -1744,8 +1764,13 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
               return;
             }
           }
+          send_text_to_client(c->sock, "[DM] ERROR: No free NPC slots.");
+          return;
         }
       }
+      send_text_to_client(c->sock,
+          "[DM] Use: dm_place <item_id 0-%d> <x 0-%d> <y 0-%d>",
+          item_database_size - 1, MAP_WIDTH - 1, MAP_HEIGHT - 1);
       return;
     }
   }
