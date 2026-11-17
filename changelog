@@ -1,3 +1,13 @@
+* Tue Nov 17 2026 DragonGL+ - 2026.11.17.01
+- SERVER: "dm_shop" with an item id outside the item database no longer
+  plants a broken entry in the shop (the next "list" there crashed the
+  server); it shows its usage, and says when the shop is full or no
+  merchant is nearby.
+- COMMANDS: dm_goto, dm_spawn, dm_place and dm_pdf answer bad input
+  with their usage once (dm_goto also added "Unrecognized command",
+  the others printed nothing); dm_pdf accepts floor 100; the help
+  lines of dm_pdf and dm_place describe what they do.
+- TEXT: the level-up banner reads "YOU HAVE RISEN TO LEVEL".
 * Sun Nov 15 2026 DragonGL+ - 2026.11.15.01
 - COMMANDS: a bare "pray" (and the HUD's Pray button) sacrifices 100 XP
   to restore HP, as "p" already did, instead of answering "Specify the
