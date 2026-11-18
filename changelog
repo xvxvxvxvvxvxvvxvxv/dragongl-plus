@@ -1,3 +1,14 @@
+* Wed Nov 18 2026 DragonGL+ - 2026.11.18.01
+- COMMANDS: the bare DM words dm_spawn, dm_goto, dm_pdf, dm_shop,
+  dm_place, dm_gold, dm_level, dm_find_monster, dm_find_item and
+  dm_merchant show their usage instead of "Unrecognized command"; an
+  empty dm_find_monster/dm_find_item search no longer lists the first
+  10 entries.
+- COMMANDS: dm_gold reports the gold actually added or removed (the
+  balance stops at 0 and no longer wraps around on huge amounts).
+- TEXT: dm_boss shows "AC", "Morale" and "Spell slots" instead of the
+  leftover "CA", "Moral" and "Ki/Inc Slot"; dm_merchant reads
+  "WANDERING MERCHANT"; both say that floors past 100 do not exist.
 * Tue Nov 17 2026 DragonGL+ - 2026.11.17.01
 - SERVER: "dm_shop" with an item id outside the item database no longer
   plants a broken entry in the shop (the next "list" there crashed the

@@ -236,6 +236,21 @@ static char *trim_spaces(char *s) {
   return s;
 }
 
+/*If cmd is the DM command 'word', bare or followed by a space and its
+ * arguments, returns the argument part (possibly ""), else NULL. Lets
+ * a bare "dm_spawn" reach the same usage line as "dm_spawn x" instead
+ * of falling through to "Unrecognized command".*/
+static const char *dm_cmd_args(const char *cmd, const char *word) {
+  size_t n = strlen(word);
+  if (strncmp(cmd, word, n) != 0)
+    return NULL;
+  if (cmd[n] == '\0')
+    return cmd + n;
+  if (cmd[n] == ' ')
+    return cmd + n + 1;
+  return NULL;
+}
+
 /* Dumps one floor to a text file understood by tools/generate_pdf_map.py.
  * Format v2: a small header (floor, size, optional player position) followed
  * by one line per row where each tile is its 2-digit hex VoxelType
@@ -521,8 +536,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         send_text_to_client(c->sock, "[DM] --- MASTER COMMANDS ---");
         send_text_to_client(c->sock, "dm_spawn <id> <x> <y> : Spawn entity/monster");
         send_text_to_client(c->sock, "dm_goto <fl> <x> <y> : Teleport (fl = floor)");
-        send_text_to_client(c->sock, "dm_find_monster <id> : Search for the monster");
-        send_text_to_client(c->sock, "dm_find_item <id> : Search for an item");
+        send_text_to_client(c->sock, "dm_find_monster <name> : Search the bestiary (shows monster ids)");
+        send_text_to_client(c->sock, "dm_find_item <name> : Search the item database (shows item ids)");
         send_text_to_client(c->sock, "dm_pdf <floor> : Generate color PDF map of a floor");
         send_text_to_client(c->sock, "dm_mapfloor : Generate color PDF of the current floor");
         send_text_to_client(c->sock, "dm_shop <id> [qty] : Add an item to a nearby merchant's stock");
@@ -1213,18 +1228,45 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
 
   // --- DM COMMANDS ---
   if (c->is_dm) {
-    if (strncmp(cmd, "dm_gold ", 8) == 0) {
-      long long amount = atoll(cmd + 8);
-      if (amount < 0 && c->gold < (uint64_t)(-amount)) {
-          c->gold = 0;
-      } else {
-          c->gold += amount;
+    const char *dm_args;
+    if ((dm_args = dm_cmd_args(cmd, "dm_gold")) != NULL) {
+      /*strtoll instead of atoll: out-of-range input is clamped instead
+       * of undefined, and a missing/non-numeric amount shows the usage
+       * instead of "Gold changed by +0".*/
+      char *end = NULL;
+      long long amount = strtoll(dm_args, &end, 10);
+      if (end == dm_args) {
+        send_text_to_client(c->sock, "[DM] Use: dm_gold <amount> (negative to remove gold)");
+        return;
       }
-      send_text_to_client(c->sock, "[DM] Gold changed by %+lld. Total: %llu gp", amount, (unsigned long long)c->gold);
+      uint64_t before = c->gold;
+      if (amount < 0) {
+        /*-(amount + 1) + 1 avoids negating LLONG_MIN*/
+        uint64_t take = (uint64_t)(-(amount + 1)) + 1;
+        c->gold = (c->gold < take) ? 0 : c->gold - take;
+      } else {
+        /*Capped at INT64_MAX: repeated big additions used to wrap the
+         * balance around to a small number, and the client computes gold
+         * deltas as signed 64-bit values.*/
+        uint64_t add = (uint64_t)amount;
+        uint64_t cap = (uint64_t)INT64_MAX;
+        if (c->gold < cap)
+          c->gold = (add > cap - c->gold) ? cap : c->gold + add;
+      }
+      /*Report what actually changed (the balance is clamped at 0 and
+       * at the maximum), not the amount that was asked for.*/
+      if (c->gold >= before)
+        send_text_to_client(c->sock, "[DM] Gold changed by +%llu. Total: %llu gp",
+                            (unsigned long long)(c->gold - before),
+                            (unsigned long long)c->gold);
+      else
+        send_text_to_client(c->sock, "[DM] Gold changed by -%llu. Total: %llu gp",
+                            (unsigned long long)(before - c->gold),
+                            (unsigned long long)c->gold);
       return;
     }
-    if (strncmp(cmd, "dm_level ", 9) == 0) {
-      int target = atoi(cmd + 9);
+    if ((dm_args = dm_cmd_args(cmd, "dm_level")) != NULL) {
+      int target = atoi(dm_args);
       if (c->level >= 20) {
         send_text_to_client(c->sock, "[DM] You are already at maximum level (20).");
         return;
@@ -1238,8 +1280,13 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       send_text_to_client(c->sock, "[DM] Level increased to required target.");
       return;
     }
-    if (strncmp(cmd, "dm_find_monster ", 16) == 0) {
-      const char *search = cmd + 16;
+    if ((dm_args = dm_cmd_args(cmd, "dm_find_monster")) != NULL) {
+      const char *search = dm_args;
+      /*An empty search matched every monster and listed the first 10*/
+      if (search[strspn(search, " ")] == '\0') {
+        send_text_to_client(c->sock, "[DM] Use: dm_find_monster <name> (part of the name is enough)");
+        return;
+      }
       int found_count = 0;
       send_text_to_client(c->sock,
                           "[DM] Monster '%s' search results:", search);
@@ -1259,8 +1306,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         send_text_to_client(c->sock, "No monsters found.");
       return;
     }
-    if (strncmp(cmd, "dm_find_item ", 13) == 0) {
-      const char *search = cmd + 13;
+    if ((dm_args = dm_cmd_args(cmd, "dm_find_item")) != NULL) {
+      const char *search = dm_args;
+      if (search[strspn(search, " ")] == '\0') {
+        send_text_to_client(c->sock, "[DM] Use: dm_find_item <name> (part of the name is enough)");
+        return;
+      }
       int found_count = 0;
       send_text_to_client(c->sock,
                           "[DM] Object '%s' search results:", search);
@@ -1369,6 +1420,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         send_text_to_client(c->sock, "[DM] Bosses appear every 10 floors: 10, 20, 30, ...");
         return;
       }
+      if (target_floor >= MAX_FLOORS) {
+        send_text_to_client(c->sock,
+          "[DM] Floor %d does not exist: the deepest floor is %d.",
+          target_floor, MAX_FLOORS - 1);
+        return;
+      }
       /*Bosses live on floors multiples of 10*/
       if (target_floor <= 0 || target_floor % 10 != 0) {
         int nearest_below = (target_floor / 10) * 10;
@@ -1411,7 +1468,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         send_text_to_client(c->sock,
           "[DM] HP : %d / %d", npcs[i].hp, npcs[i].max_hp);
         send_text_to_client(c->sock,
-          "[DM] CA : %d", npcs[i].ac);
+          "[DM] AC : %d", npcs[i].ac);
         send_text_to_client(c->sock,
           "[DM] Attack: +%d Damage: %dd%d",
           npcs[i].attack_bonus, npcs[i].damage_dice, npcs[i].damage_sides);
@@ -1419,7 +1476,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
           "[DM] XP: %d Gold: %d",
           npcs[i].xp_reward, npcs[i].gold_drop);
         send_text_to_client(c->sock,
-          "[DM] Moral: %d", npcs[i].morale);
+          "[DM] Morale: %d", npcs[i].morale);
         /*Data from template bestiary*/
         if (npcs[i].template) {
           const MonsterTemplate *t = npcs[i].template;
@@ -1452,7 +1509,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
               sl, npcs[i].spell_slots[sl], npcs[i].spell_slots_max[sl]);
             strncat(slot_buf, tmp, sizeof(slot_buf) - strlen(slot_buf) - 1);
           }
-          send_text_to_client(c->sock, "[DM] Ki/Inc Slot: %s", slot_buf);
+          send_text_to_client(c->sock, "[DM] Spell slots: %s", slot_buf);
         }
         /*Loot ghost (items he carries)*/
         bool has_loot = false;
@@ -1517,11 +1574,17 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       return;
     }
 
-    if (strncmp(cmd, "dm_merchant ", 12) == 0) {
+    if ((dm_args = dm_cmd_args(cmd, "dm_merchant")) != NULL) {
       int target_floor = 0;
-      if (sscanf(cmd + 12, "%d", &target_floor) != 1) {
+      if (sscanf(dm_args, "%d", &target_floor) != 1) {
         send_text_to_client(c->sock, "[DM] Use: dm_merchant <floor> (ex: dm_merchant 5)");
         send_text_to_client(c->sock, "[DM] Wandering merchants appear every 5 floors (e.g. 5, 15, 25), excluding boss floors.");
+        return;
+      }
+      if (target_floor >= MAX_FLOORS) {
+        send_text_to_client(c->sock,
+          "[DM] Floor %d does not exist: the deepest floor is %d.",
+          target_floor, MAX_FLOORS - 1);
         return;
       }
       /*Merchants appear every 5 floors, but not on multiples of 10 (boss floors)*/
@@ -1555,7 +1618,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         send_text_to_client(c->sock,
           "[DM] +======================= =======================+");
         send_text_to_client(c->sock,
-          "[DM] WANDING MERCHANT #%d (NPC id %d)", merch_count, npcs[i].entity_id);
+          "[DM] WANDERING MERCHANT #%d (NPC id %d)", merch_count, npcs[i].entity_id);
         send_text_to_client(c->sock,
           "[DM] +======================= =======================+");
         /* Position */
@@ -1594,9 +1657,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       }
       return;
     }
-    if (strncmp(cmd, "dm_spawn ", 9) == 0) {
+    if ((dm_args = dm_cmd_args(cmd, "dm_spawn")) != NULL) {
       int tid = 0, tx = 0, ty = 0;
-      if (sscanf(cmd + 9, "%d %d %d", &tid, &tx, &ty) == 3) {
+      if (sscanf(dm_args, "%d %d %d", &tid, &tx, &ty) == 3) {
         /*Bounds on x/y: an out-of-map coordinate would write a bogus
          * position into the NPC and corrupt entity_grid lookups.*/
         if (tid >= 0 && tid < bestiary_size &&
@@ -1640,9 +1703,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
           MAP_WIDTH - 1, MAP_HEIGHT - 1);
       return;
     }
-    if (strncmp(cmd, "dm_goto ", 8) == 0) {
+    if ((dm_args = dm_cmd_args(cmd, "dm_goto")) != NULL) {
       int f = 0, tx = 0, ty = 0;
-      if (sscanf(cmd + 8, "%d %d %d", &f, &tx, &ty) == 3) {
+      if (sscanf(dm_args, "%d %d %d", &f, &tx, &ty) == 3) {
         /*Bounds: out-of-map coordinates would be used to index the map
          * and entity_grid on the very next tick (OOB read/write).*/
         if (f >= 0 && f < MAX_FLOORS &&
@@ -1677,9 +1740,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
           MAX_FLOORS - 1, MAP_WIDTH - 1, MAP_HEIGHT - 1);
       return;
     }
-    if (strncmp(cmd, "dm_pdf ", 7) == 0) {
+    if ((dm_args = dm_cmd_args(cmd, "dm_pdf")) != NULL) {
       int f = 0;
-      if (sscanf(cmd + 7, "%d", &f) == 1 && f >= 0 && f < MAX_FLOORS) {
+      if (sscanf(dm_args, "%d", &f) == 1 && f >= 0 && f < MAX_FLOORS) {
         if (dump_floor_v2("map_dump.txt", f, c) == 0) {
           char pdf_path[128];
           snprintf(pdf_path, sizeof(pdf_path), "map_floor_%d.pdf", f);
@@ -1705,12 +1768,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       run_pdf_map_generator(c->sock, dump_path, pdf_path, f);
       return;
     }
-    if (strncmp(cmd, "dm_shop ", 8) == 0) {
+    if ((dm_args = dm_cmd_args(cmd, "dm_shop")) != NULL) {
       int iid = 0, qty = 1;
       /*The id is stored as-is in the merchant's stock (and saved with
        * the NPCs): an id outside item_database crashed the server on the
        * next 'list' at that shop, and again after every restart.*/
-      if (sscanf(cmd + 8, "%d %d", &iid, &qty) < 1 ||
+      if (sscanf(dm_args, "%d %d", &iid, &qty) < 1 ||
           iid < 0 || iid >= item_database_size || qty < 1) {
         send_text_to_client(c->sock,
             "[DM] Use: dm_shop <item_id 0-%d> [qty >= 1] ('dm_find_item <name>' shows the ids)",
@@ -1737,9 +1800,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       send_text_to_client(c->sock, "[DM] No merchant nearby (within 5 steps).");
       return;
     }
-    if (strncmp(cmd, "dm_place ", 9) == 0) {
+    if ((dm_args = dm_cmd_args(cmd, "dm_place")) != NULL) {
       int iid = 0, tx = 0, ty = 0;
-      if (sscanf(cmd + 9, "%d %d %d", &iid, &tx, &ty) == 3) {
+      if (sscanf(dm_args, "%d %d %d", &iid, &tx, &ty) == 3) {
         /*Bounds: out-of-range x/y would index the map and the
          * entity_grid out of bounds on the very next sync tick.*/
         if (iid >= 0 && iid < item_database_size &&
