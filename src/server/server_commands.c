@@ -1420,6 +1420,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         send_text_to_client(c->sock, "[DM] Bosses appear every 10 floors: 10, 20, 30, ...");
         return;
       }
+      if (target_floor >= MAX_FLOORS) {
+        send_text_to_client(c->sock,
+          "[DM] Floor %d does not exist: the deepest floor is %d.",
+          target_floor, MAX_FLOORS - 1);
+        return;
+      }
       /*Bosses live on floors multiples of 10*/
       if (target_floor <= 0 || target_floor % 10 != 0) {
         int nearest_below = (target_floor / 10) * 10;
@@ -1462,7 +1468,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         send_text_to_client(c->sock,
           "[DM] HP : %d / %d", npcs[i].hp, npcs[i].max_hp);
         send_text_to_client(c->sock,
-          "[DM] CA : %d", npcs[i].ac);
+          "[DM] AC : %d", npcs[i].ac);
         send_text_to_client(c->sock,
           "[DM] Attack: +%d Damage: %dd%d",
           npcs[i].attack_bonus, npcs[i].damage_dice, npcs[i].damage_sides);
@@ -1470,7 +1476,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
           "[DM] XP: %d Gold: %d",
           npcs[i].xp_reward, npcs[i].gold_drop);
         send_text_to_client(c->sock,
-          "[DM] Moral: %d", npcs[i].morale);
+          "[DM] Morale: %d", npcs[i].morale);
         /*Data from template bestiary*/
         if (npcs[i].template) {
           const MonsterTemplate *t = npcs[i].template;
@@ -1503,7 +1509,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
               sl, npcs[i].spell_slots[sl], npcs[i].spell_slots_max[sl]);
             strncat(slot_buf, tmp, sizeof(slot_buf) - strlen(slot_buf) - 1);
           }
-          send_text_to_client(c->sock, "[DM] Ki/Inc Slot: %s", slot_buf);
+          send_text_to_client(c->sock, "[DM] Spell slots: %s", slot_buf);
         }
         /*Loot ghost (items he carries)*/
         bool has_loot = false;
@@ -1575,6 +1581,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         send_text_to_client(c->sock, "[DM] Wandering merchants appear every 5 floors (e.g. 5, 15, 25), excluding boss floors.");
         return;
       }
+      if (target_floor >= MAX_FLOORS) {
+        send_text_to_client(c->sock,
+          "[DM] Floor %d does not exist: the deepest floor is %d.",
+          target_floor, MAX_FLOORS - 1);
+        return;
+      }
       /*Merchants appear every 5 floors, but not on multiples of 10 (boss floors)*/
       if (target_floor <= 0 || target_floor % 5 != 0 || target_floor % 10 == 0) {
         int nearest_below = target_floor - (target_floor % 5);
@@ -1606,7 +1618,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         send_text_to_client(c->sock,
           "[DM] +======================= =======================+");
         send_text_to_client(c->sock,
-          "[DM] WANDING MERCHANT #%d (NPC id %d)", merch_count, npcs[i].entity_id);
+          "[DM] WANDERING MERCHANT #%d (NPC id %d)", merch_count, npcs[i].entity_id);
         send_text_to_client(c->sock,
           "[DM] +======================= =======================+");
         /* Position */
