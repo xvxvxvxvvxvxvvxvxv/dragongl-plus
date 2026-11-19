@@ -2302,8 +2302,10 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       get_full_item_name(&c->slot_hand_l, weapon_buf, sizeof(weapon_buf));
       weapon_name = weapon_buf;
     }
-    //Proficiency bonuses
-    int prof = 2 + (c->level / 4);
+    //Proficiency bonus: +2 at levels 1-4, +3 at 5-8 ... +6 at 17-20,
+    //the same formula 'disarm' uses (level/4 showed +3 at level 4 and
+    //+7 at level 20).
+    int prof = 2 + (c->level - 1) / 4;
     send_text_to_client(c->sock, "======== %s ========", c->username);
     send_text_to_client(c->sock, "Lvl:%-3d XP:%-6d Floor:%d", c->level,
                         c->xp, c->floor_id);
