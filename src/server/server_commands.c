@@ -226,6 +226,28 @@ static bool msg_rate_ok(Client *c) {
   return true;
 }
 
+/*True if the item a trader offered is still at the same backpack slot.
+ * The offer only records a slot index: dropping, selling or using items
+ * after the offer shifts the backpack, and the trade then handed over a
+ * different item, or a stale copy of one already dropped (duplicating
+ * it and leaving backpack_count at -1).*/
+static bool trade_offer_still_valid(const Client *c) {
+  if (c->trade_offer_item_idx == -1) return true;
+  if (c->trade_offer_item_idx < 0 || c->trade_offer_item_idx >= c->backpack_count)
+    return false;
+  const ItemInstance *a = &c->backpack[c->trade_offer_item_idx];
+  const ItemInstance *b = &c->trade_offer_item;
+  return a->template_idx == b->template_idx && a->template_idx >= 0 &&
+         a->stack_count == b->stack_count && a->durability == b->durability &&
+         a->is_identified == b->is_identified &&
+         a->current_charges == b->current_charges &&
+         a->to_hit_bonus == b->to_hit_bonus && a->to_dam_bonus == b->to_dam_bonus &&
+         a->ac_bonus == b->ac_bonus && a->quality == b->quality &&
+         a->blessing == b->blessing && a->element == b->element &&
+         a->is_artifact == b->is_artifact &&
+         strcmp(a->artifact_name, b->artifact_name) == 0;
+}
+
 /*Removes leading and trailing spaces in-place. Returns the beginning of the string.*/
 static char *trim_spaces(char *s) {
   while (*s == ' ')
@@ -845,9 +867,16 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
               break;
           }
       }
-      if (!t || strcmp(t->trading_with, c->username) != 0) {
+      if (!t) {
           send_text_to_client(c->sock, "[TRADE] The other player canceled or disconnected.");
           c->trading_with[0] = '\0';
+          return;
+      }
+      if (strcmp(t->trading_with, c->username) != 0) {
+          /*The request is still pending: the other player has not typed
+           * 'trade <name>' yet. This used to claim they had canceled and
+           * dropped the request.*/
+          send_text_to_client(c->sock, "[TRADE] %s has not accepted your trade request yet.", t->username);
           return;
       }
       
@@ -869,6 +898,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
               int idx = item - 1;
               if (idx >= 0 && idx < c->backpack_count && c->backpack[idx].template_idx >= 0) {
                   c->trade_offer_item_idx = idx;
+                  c->trade_offer_item = c->backpack[idx];
               } else {
                   send_text_to_client(c->sock, "[TRADE] Invalid item in backpack.");
                   return;
@@ -899,9 +929,16 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
               break;
           }
       }
-      if (!t || strcmp(t->trading_with, c->username) != 0) {
+      if (!t) {
           send_text_to_client(c->sock, "[TRADE] The other player canceled or disconnected.");
           c->trading_with[0] = '\0';
+          return;
+      }
+      if (strcmp(t->trading_with, c->username) != 0) {
+          /*The request is still pending: the other player has not typed
+           * 'trade <name>' yet. This used to claim they had canceled and
+           * dropped the request.*/
+          send_text_to_client(c->sock, "[TRADE] %s has not accepted your trade request yet.", t->username);
           return;
       }
       
@@ -912,6 +949,31 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       if (c->trade_accepted && t->trade_accepted) {
           //Execute the exchange
           // Final validity checks
+          bool c_item_ok = trade_offer_still_valid(c);
+          bool t_item_ok = trade_offer_still_valid(t);
+          if (!c_item_ok || !t_item_ok) {
+              /*An offered item left its backpack slot after the offer:
+               * withdraw that item and let both sides confirm again.*/
+              Client *who = !c_item_ok ? c : t;
+              who->trade_offer_item_idx = -1;
+              c->trade_accepted = false;
+              t->trade_accepted = false;
+              send_text_to_client(c->sock, "[TRADE] The item offered by %s is no longer in their backpack: offer withdrawn, make a new offer and accept again.", who->username);
+              send_text_to_client(t->sock, "[TRADE] The item offered by %s is no longer in their backpack: offer withdrawn, make a new offer and accept again.", who->username);
+              return;
+          }
+          int c_after = c->backpack_count - (c->trade_offer_item_idx != -1 ? 1 : 0);
+          int t_after = t->backpack_count - (t->trade_offer_item_idx != -1 ? 1 : 0);
+          if ((t->trade_offer_item_idx != -1 && c_after >= MAX_BACKPACK) ||
+              (c->trade_offer_item_idx != -1 && t_after >= MAX_BACKPACK)) {
+              /*A full backpack used to lose its last item (overwritten
+               * by the incoming one).*/
+              c->trade_accepted = false;
+              t->trade_accepted = false;
+              send_text_to_client(c->sock, "[TRADE] A backpack is full: make room and accept again.");
+              send_text_to_client(t->sock, "[TRADE] A backpack is full: make room and accept again.");
+              return;
+          }
           if (c->gold < c->trade_offer_gold || t->gold < t->trade_offer_gold) {
               send_text_to_client(c->sock, "[TRADE] ERROR: Insufficient gold, trade cancelled.");
               send_text_to_client(t->sock, "[TRADE] ERROR: Insufficient gold, trade cancelled.");

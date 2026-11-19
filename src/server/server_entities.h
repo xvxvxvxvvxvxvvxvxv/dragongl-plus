@@ -179,6 +179,7 @@ typedef struct {
     bool trade_accepted;             //true if he accepted the trade
     int trade_offer_item_idx;        //Backpack index of the offered item (-1 = none)
     uint64_t trade_offer_gold;       //Gold offered
+    ItemInstance trade_offer_item;   //Copy of the offered item, checked again when the trade runs
 
     /*--- Messaging: block list and anti-spam ---*/
     char blocked_players[MAX_BLOCKED_PLAYERS][32]; //Username of blocked players
