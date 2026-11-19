@@ -1,3 +1,14 @@
+* Thu Nov 19 2026 DragonGL+ - 2026.11.19.01
+- TRADE: an item dropped, sold or used after "offer" can no longer be
+  duplicated or swapped for another backpack item when the trade
+  completes (the dropped copy was handed over too and the backpack count
+  went negative): the offer is withdrawn and both players confirm again.
+  A full backpack no longer loses its last item in a trade.
+- TRADE: "offer"/"accept" before the other player answered the request
+  say it is still pending instead of "canceled or disconnected".
+- PARTY: "invite" on a player already in your party says so.
+- TEXT: "stats" shows the proficiency bonus by the standard table
+  (+2 at levels 1-4 up to +6 at 17-20; it showed +7 at level 20).
 * Wed Nov 18 2026 DragonGL+ - 2026.11.18.01
 - COMMANDS: the bare DM words dm_spawn, dm_goto, dm_pdf, dm_shop,
   dm_place, dm_gold, dm_level, dm_find_monster, dm_find_item and
