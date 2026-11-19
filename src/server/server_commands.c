@@ -726,6 +726,11 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       bool found = false;
       for (int i = 0; i < MAX_CLIENTS; i++) {
           if (g_clients[i].active && g_clients[i].authenticated && strcmp(g_clients[i].username, target_name) == 0) {
+              if (c->party_leader[0] != '\0' &&
+                  strcmp(g_clients[i].party_leader, c->party_leader) == 0) {
+                  send_text_to_client(c->sock, "[PARTY] %s is already in your party.", target_name);
+                  return;
+              }
               strncpy(g_clients[i].pending_invite, c->username, 31);
               send_text_to_client(g_clients[i].sock, "[PARTY] %s has invited you to their party! Type 'join' to accept.", c->username);
               send_text_to_client(c->sock, "[PARTY] Invitation sent to %s.", target_name);
