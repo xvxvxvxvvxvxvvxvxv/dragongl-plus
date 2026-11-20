@@ -2362,7 +2362,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     if (c->slot_body.template_idx != -1) {
       char armor_buf[128];
       get_full_item_name(&c->slot_body, armor_buf, sizeof(armor_buf));
-      send_text_to_client(c->sock, "Armor: %s (base AC %d)",
+      send_text_to_client(c->sock, "  Armor: %s (base AC %d)",
                           armor_buf,
                           ac_base);
     }
@@ -2387,8 +2387,15 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       send_text_to_client(c->sock, "--- ACTIVE EFFECTS ---");
       for (int e = 0; e < c->effect_count; e++) {
         ActiveEffect *ef = &c->effects[e];
-        send_text_to_client(c->sock, "  #%d val:%d (%s)", e + 1, ef->value,
-                            ef->is_persistent ? "persistent" : "temporary");
+        /*Name and remaining rounds: the old "#1 val:0 (temporary)"
+         * did not say which condition it was.*/
+        const char *ename = (ef->name && ef->name[0]) ? ef->name : "Unknown effect";
+        if (ef->is_persistent)
+          send_text_to_client(c->sock, "  %s (persistent)", ename);
+        else
+          send_text_to_client(c->sock, "  %s (%d round%s left)", ename,
+                              ef->duration_rounds,
+                              ef->duration_rounds == 1 ? "" : "s");
       }
     }
     send_text_to_client(c->sock, "==============================");
