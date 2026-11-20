@@ -382,6 +382,12 @@ static bool load_items_json(const char* filepath) {
         if (cJSON_IsString(desc)) {
             item_database[i].description = strip_html_tags(desc->valuestring);
         }
+        /*70 basic items (Club, Dagger, Spear...) have "" in items.json:
+         * 'browse'/'lore' showed "[INFO] Spear: " with nothing after it.*/
+        if (item_database[i].description && item_database[i].description[0] == '\0') {
+            free((void*)item_database[i].description);
+            item_database[i].description = NULL;
+        }
         if (!item_database[i].description) {
             item_database[i].description = strdup("No description available.");
         }

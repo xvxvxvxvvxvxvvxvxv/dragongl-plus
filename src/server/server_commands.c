@@ -77,6 +77,44 @@ static const TempleInfo TEMPLES[] = {
 };
 static const int TEMPLE_COUNT = 12;
 
+/*Sends "<prefix><text>" as one or more chat lines. A single MsgText holds
+ * 255 characters, and many item descriptions are longer (up to ~3000):
+ * 'browse' and 'lore' used to cut them off mid-sentence. Lines break at
+ * the last space that fits; a word longer than a line is split without
+ * cutting a UTF-8 sequence.*/
+static void send_long_text(int sock, const char *prefix, const char *text) {
+  enum { LINE_MAX_CHARS = 240 };
+  size_t plen = strlen(prefix);
+  if (plen > LINE_MAX_CHARS / 2)
+    plen = LINE_MAX_CHARS / 2;
+  bool first = true;
+  while (first || *text != '\0') {
+    size_t room = first ? LINE_MAX_CHARS - plen : LINE_MAX_CHARS;
+    size_t len = strlen(text);
+    if (len > room) {
+      size_t cut = room;
+      while (cut > room / 2 && text[cut] != ' ')
+        cut--;
+      if (text[cut] != ' ') {
+        cut = room;
+        while (cut > 0 && ((unsigned char)text[cut] & 0xC0) == 0x80)
+          cut--;
+        if (cut == 0)
+          cut = room;
+      }
+      len = cut;
+    }
+    if (first)
+      send_text_to_client(sock, "%.*s%.*s", (int)plen, prefix, (int)len, text);
+    else
+      send_text_to_client(sock, "%.*s", (int)len, text);
+    text += len;
+    while (*text == ' ')
+      text++;
+    first = false;
+  }
+}
+
 static const char *get_voxel_name_it(VoxelType vt) {
   switch (vt) {
   case VOXEL_FLOOR:
@@ -1277,8 +1315,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         if (target_item >= 0 && target_item < npcs[i].merchant.item_count) {
           ItemTemplate *it =
               &item_database[npcs[i].merchant.item_templates[target_item]];
-          send_text_to_client(c->sock, "[INFO] %s: %s", it->name,
-                              it->description);
+          char head[96];
+          snprintf(head, sizeof(head), "[INFO] %s: ", it->name);
+          send_long_text(c->sock, head, it->description);
           found = true;
         } else {
           send_text_to_client(c->sock, "[ERROR] Invalid object number.");
@@ -3448,7 +3487,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
 
     ItemTemplate *tmpl = &item_database[c->backpack[found_idx].template_idx];
-    send_text_to_client(c->sock, "[LORE] %s: %s", tmpl->name, tmpl->description);
+    char lore_head[96];
+    snprintf(lore_head, sizeof(lore_head), "[LORE] %s: ", tmpl->name);
+    send_long_text(c->sock, lore_head, tmpl->description);
     
     if (tmpl->category == ITEM_BOOK) {
       send_text_to_client(c->sock, "--- Spell Index ---");
