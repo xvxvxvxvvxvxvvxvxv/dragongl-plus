@@ -1,3 +1,13 @@
+* Fri Nov 20 2026 DragonGL+ - 2026.11.20.01
+- TEXT: "browse" and "lore" show the whole item description over
+  several lines (long ones were cut off at 255 characters); items with
+  no description say "No description available." instead of nothing.
+- SHOPS: "buy <name>" prefers the item with exactly that name ("buy
+  club" bought the Greatclub listed before the Club); the haggle offer
+  reads "Use 'buy 23' to confirm" (the space was missing).
+- TEXT: "stats" names each active effect with its remaining rounds
+  (it printed "#1 val:0 (temporary)"); the Armor line is indented like
+  the Weapon line.
 * Thu Nov 19 2026 DragonGL+ - 2026.11.19.01
 - TRADE: an item dropped, sold or used after "offer" can no longer be
   duplicated or swapped for another backpack item when the trade
