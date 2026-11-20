@@ -2763,7 +2763,17 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         shop_item_idx = requested_idx;
       }
     } else {
+      /*An exact name wins over a partial one: "buy dagger" picked the
+       * first item containing "dagger" (e.g. a 2500 gp Dagger of Venom
+       * listed before the plain Dagger).*/
       for (int j = 0; j < npcs[m_idx].merchant.item_count; j++) {
+        int t_idx = npcs[m_idx].merchant.item_templates[j];
+        if (strcasecmp(item_database[t_idx].name, input) == 0) {
+          shop_item_idx = j;
+          break;
+        }
+      }
+      for (int j = 0; shop_item_idx == -1 && j < npcs[m_idx].merchant.item_count; j++) {
         int t_idx = npcs[m_idx].merchant.item_templates[j];
         if (strcasestr(item_database[t_idx].name, input) != NULL) {
           shop_item_idx = j;
@@ -3054,7 +3064,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       c->pending_trade_merchant_id = npcs[m_idx].entity_id;
       c->pending_trade_is_buy = true;
       send_text_to_client(c->sock,
-                          "[STORE] Current offer for %s: %lu gp. Use 'buy"
+                          "[STORE] Current offer for %s: %lu gp. Use 'buy "
                           "%d' to confirm.",
                           item_database[d_idx].name, (unsigned long)final_cost,
                           item_idx + 1);
