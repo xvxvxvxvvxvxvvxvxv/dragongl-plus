@@ -77,6 +77,44 @@ static const TempleInfo TEMPLES[] = {
 };
 static const int TEMPLE_COUNT = 12;
 
+/*Sends "<prefix><text>" as one or more chat lines. A single MsgText holds
+ * 255 characters, and many item descriptions are longer (up to ~3000):
+ * 'browse' and 'lore' used to cut them off mid-sentence. Lines break at
+ * the last space that fits; a word longer than a line is split without
+ * cutting a UTF-8 sequence.*/
+static void send_long_text(int sock, const char *prefix, const char *text) {
+  enum { LINE_MAX_CHARS = 240 };
+  size_t plen = strlen(prefix);
+  if (plen > LINE_MAX_CHARS / 2)
+    plen = LINE_MAX_CHARS / 2;
+  bool first = true;
+  while (first || *text != '\0') {
+    size_t room = first ? LINE_MAX_CHARS - plen : LINE_MAX_CHARS;
+    size_t len = strlen(text);
+    if (len > room) {
+      size_t cut = room;
+      while (cut > room / 2 && text[cut] != ' ')
+        cut--;
+      if (text[cut] != ' ') {
+        cut = room;
+        while (cut > 0 && ((unsigned char)text[cut] & 0xC0) == 0x80)
+          cut--;
+        if (cut == 0)
+          cut = room;
+      }
+      len = cut;
+    }
+    if (first)
+      send_text_to_client(sock, "%.*s%.*s", (int)plen, prefix, (int)len, text);
+    else
+      send_text_to_client(sock, "%.*s", (int)len, text);
+    text += len;
+    while (*text == ' ')
+      text++;
+    first = false;
+  }
+}
+
 static const char *get_voxel_name_it(VoxelType vt) {
   switch (vt) {
   case VOXEL_FLOOR:
@@ -224,6 +262,28 @@ static bool msg_rate_ok(Client *c) {
     return false;
   c->last_msg_ms = now;
   return true;
+}
+
+/*True if the item a trader offered is still at the same backpack slot.
+ * The offer only records a slot index: dropping, selling or using items
+ * after the offer shifts the backpack, and the trade then handed over a
+ * different item, or a stale copy of one already dropped (duplicating
+ * it and leaving backpack_count at -1).*/
+static bool trade_offer_still_valid(const Client *c) {
+  if (c->trade_offer_item_idx == -1) return true;
+  if (c->trade_offer_item_idx < 0 || c->trade_offer_item_idx >= c->backpack_count)
+    return false;
+  const ItemInstance *a = &c->backpack[c->trade_offer_item_idx];
+  const ItemInstance *b = &c->trade_offer_item;
+  return a->template_idx == b->template_idx && a->template_idx >= 0 &&
+         a->stack_count == b->stack_count && a->durability == b->durability &&
+         a->is_identified == b->is_identified &&
+         a->current_charges == b->current_charges &&
+         a->to_hit_bonus == b->to_hit_bonus && a->to_dam_bonus == b->to_dam_bonus &&
+         a->ac_bonus == b->ac_bonus && a->quality == b->quality &&
+         a->blessing == b->blessing && a->element == b->element &&
+         a->is_artifact == b->is_artifact &&
+         strcmp(a->artifact_name, b->artifact_name) == 0;
 }
 
 /*Removes leading and trailing spaces in-place. Returns the beginning of the string.*/
@@ -704,6 +764,11 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       bool found = false;
       for (int i = 0; i < MAX_CLIENTS; i++) {
           if (g_clients[i].active && g_clients[i].authenticated && strcmp(g_clients[i].username, target_name) == 0) {
+              if (c->party_leader[0] != '\0' &&
+                  strcmp(g_clients[i].party_leader, c->party_leader) == 0) {
+                  send_text_to_client(c->sock, "[PARTY] %s is already in your party.", target_name);
+                  return;
+              }
               strncpy(g_clients[i].pending_invite, c->username, 31);
               send_text_to_client(g_clients[i].sock, "[PARTY] %s has invited you to their party! Type 'join' to accept.", c->username);
               send_text_to_client(c->sock, "[PARTY] Invitation sent to %s.", target_name);
@@ -845,9 +910,16 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
               break;
           }
       }
-      if (!t || strcmp(t->trading_with, c->username) != 0) {
+      if (!t) {
           send_text_to_client(c->sock, "[TRADE] The other player canceled or disconnected.");
           c->trading_with[0] = '\0';
+          return;
+      }
+      if (strcmp(t->trading_with, c->username) != 0) {
+          /*The request is still pending: the other player has not typed
+           * 'trade <name>' yet. This used to claim they had canceled and
+           * dropped the request.*/
+          send_text_to_client(c->sock, "[TRADE] %s has not accepted your trade request yet.", t->username);
           return;
       }
       
@@ -869,6 +941,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
               int idx = item - 1;
               if (idx >= 0 && idx < c->backpack_count && c->backpack[idx].template_idx >= 0) {
                   c->trade_offer_item_idx = idx;
+                  c->trade_offer_item = c->backpack[idx];
               } else {
                   send_text_to_client(c->sock, "[TRADE] Invalid item in backpack.");
                   return;
@@ -899,9 +972,16 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
               break;
           }
       }
-      if (!t || strcmp(t->trading_with, c->username) != 0) {
+      if (!t) {
           send_text_to_client(c->sock, "[TRADE] The other player canceled or disconnected.");
           c->trading_with[0] = '\0';
+          return;
+      }
+      if (strcmp(t->trading_with, c->username) != 0) {
+          /*The request is still pending: the other player has not typed
+           * 'trade <name>' yet. This used to claim they had canceled and
+           * dropped the request.*/
+          send_text_to_client(c->sock, "[TRADE] %s has not accepted your trade request yet.", t->username);
           return;
       }
       
@@ -912,6 +992,31 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       if (c->trade_accepted && t->trade_accepted) {
           //Execute the exchange
           // Final validity checks
+          bool c_item_ok = trade_offer_still_valid(c);
+          bool t_item_ok = trade_offer_still_valid(t);
+          if (!c_item_ok || !t_item_ok) {
+              /*An offered item left its backpack slot after the offer:
+               * withdraw that item and let both sides confirm again.*/
+              Client *who = !c_item_ok ? c : t;
+              who->trade_offer_item_idx = -1;
+              c->trade_accepted = false;
+              t->trade_accepted = false;
+              send_text_to_client(c->sock, "[TRADE] The item offered by %s is no longer in their backpack: offer withdrawn, make a new offer and accept again.", who->username);
+              send_text_to_client(t->sock, "[TRADE] The item offered by %s is no longer in their backpack: offer withdrawn, make a new offer and accept again.", who->username);
+              return;
+          }
+          int c_after = c->backpack_count - (c->trade_offer_item_idx != -1 ? 1 : 0);
+          int t_after = t->backpack_count - (t->trade_offer_item_idx != -1 ? 1 : 0);
+          if ((t->trade_offer_item_idx != -1 && c_after >= MAX_BACKPACK) ||
+              (c->trade_offer_item_idx != -1 && t_after >= MAX_BACKPACK)) {
+              /*A full backpack used to lose its last item (overwritten
+               * by the incoming one).*/
+              c->trade_accepted = false;
+              t->trade_accepted = false;
+              send_text_to_client(c->sock, "[TRADE] A backpack is full: make room and accept again.");
+              send_text_to_client(t->sock, "[TRADE] A backpack is full: make room and accept again.");
+              return;
+          }
           if (c->gold < c->trade_offer_gold || t->gold < t->trade_offer_gold) {
               send_text_to_client(c->sock, "[TRADE] ERROR: Insufficient gold, trade cancelled.");
               send_text_to_client(t->sock, "[TRADE] ERROR: Insufficient gold, trade cancelled.");
@@ -1210,8 +1315,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         if (target_item >= 0 && target_item < npcs[i].merchant.item_count) {
           ItemTemplate *it =
               &item_database[npcs[i].merchant.item_templates[target_item]];
-          send_text_to_client(c->sock, "[INFO] %s: %s", it->name,
-                              it->description);
+          char head[96];
+          snprintf(head, sizeof(head), "[INFO] %s: ", it->name);
+          send_long_text(c->sock, head, it->description);
           found = true;
         } else {
           send_text_to_client(c->sock, "[ERROR] Invalid object number.");
@@ -2235,8 +2341,10 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       get_full_item_name(&c->slot_hand_l, weapon_buf, sizeof(weapon_buf));
       weapon_name = weapon_buf;
     }
-    //Proficiency bonuses
-    int prof = 2 + (c->level / 4);
+    //Proficiency bonus: +2 at levels 1-4, +3 at 5-8 ... +6 at 17-20,
+    //the same formula 'disarm' uses (level/4 showed +3 at level 4 and
+    //+7 at level 20).
+    int prof = 2 + (c->level - 1) / 4;
     send_text_to_client(c->sock, "======== %s ========", c->username);
     send_text_to_client(c->sock, "Lvl:%-3d XP:%-6d Floor:%d", c->level,
                         c->xp, c->floor_id);
@@ -2254,7 +2362,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     if (c->slot_body.template_idx != -1) {
       char armor_buf[128];
       get_full_item_name(&c->slot_body, armor_buf, sizeof(armor_buf));
-      send_text_to_client(c->sock, "Armor: %s (base AC %d)",
+      send_text_to_client(c->sock, "  Armor: %s (base AC %d)",
                           armor_buf,
                           ac_base);
     }
@@ -2279,8 +2387,15 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       send_text_to_client(c->sock, "--- ACTIVE EFFECTS ---");
       for (int e = 0; e < c->effect_count; e++) {
         ActiveEffect *ef = &c->effects[e];
-        send_text_to_client(c->sock, "  #%d val:%d (%s)", e + 1, ef->value,
-                            ef->is_persistent ? "persistent" : "temporary");
+        /*Name and remaining rounds: the old "#1 val:0 (temporary)"
+         * did not say which condition it was.*/
+        const char *ename = (ef->name && ef->name[0]) ? ef->name : "Unknown effect";
+        if (ef->is_persistent)
+          send_text_to_client(c->sock, "  %s (persistent)", ename);
+        else
+          send_text_to_client(c->sock, "  %s (%d round%s left)", ename,
+                              ef->duration_rounds,
+                              ef->duration_rounds == 1 ? "" : "s");
       }
     }
     send_text_to_client(c->sock, "==============================");
@@ -2655,7 +2770,17 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         shop_item_idx = requested_idx;
       }
     } else {
+      /*An exact name wins over a partial one: "buy dagger" picked the
+       * first item containing "dagger" (e.g. a 2500 gp Dagger of Venom
+       * listed before the plain Dagger).*/
       for (int j = 0; j < npcs[m_idx].merchant.item_count; j++) {
+        int t_idx = npcs[m_idx].merchant.item_templates[j];
+        if (strcasecmp(item_database[t_idx].name, input) == 0) {
+          shop_item_idx = j;
+          break;
+        }
+      }
+      for (int j = 0; shop_item_idx == -1 && j < npcs[m_idx].merchant.item_count; j++) {
         int t_idx = npcs[m_idx].merchant.item_templates[j];
         if (strcasestr(item_database[t_idx].name, input) != NULL) {
           shop_item_idx = j;
@@ -2946,7 +3071,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       c->pending_trade_merchant_id = npcs[m_idx].entity_id;
       c->pending_trade_is_buy = true;
       send_text_to_client(c->sock,
-                          "[STORE] Current offer for %s: %lu gp. Use 'buy"
+                          "[STORE] Current offer for %s: %lu gp. Use 'buy "
                           "%d' to confirm.",
                           item_database[d_idx].name, (unsigned long)final_cost,
                           item_idx + 1);
@@ -3379,7 +3504,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
 
     ItemTemplate *tmpl = &item_database[c->backpack[found_idx].template_idx];
-    send_text_to_client(c->sock, "[LORE] %s: %s", tmpl->name, tmpl->description);
+    char lore_head[96];
+    snprintf(lore_head, sizeof(lore_head), "[LORE] %s: ", tmpl->name);
+    send_long_text(c->sock, lore_head, tmpl->description);
     
     if (tmpl->category == ITEM_BOOK) {
       send_text_to_client(c->sock, "--- Spell Index ---");
