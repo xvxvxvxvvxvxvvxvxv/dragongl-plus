@@ -1,3 +1,8 @@
+* Sat Nov 21 2026 DragonGL+ - 2026.11.21.01
+- SHOPS: "talk" finds a merchant up to 4 steps away, like "list",
+  "buy" and "sell" (from 3-4 steps it said "No merchants nearby").
+- ITEMS: the Trident and the Trident of Fish Command deal 1d6 damage
+  (they listed a non-existent 1d7).
 * Fri Nov 20 2026 DragonGL+ - 2026.11.20.01
 - TEXT: "browse" and "lore" show the whole item description over
   several lines (long ones were cut off at 255 characters); items with
