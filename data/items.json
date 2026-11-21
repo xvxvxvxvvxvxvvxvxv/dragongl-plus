@@ -542,7 +542,7 @@
             "rarity": "COMMON",
             "classification": "Martial Melee Weapons",
             "ac": "",
-            "damage": "1d7",
+            "damage": "1d6",
             "damage_type": "",
             "properties": "thrown (range 20/60) | versatile (1d8)",
             "cost": "500"
@@ -3119,7 +3119,7 @@
             "rarity": "UNCOMMON",
             "classification": "Martial Melee Weapons",
             "ac": "",
-            "damage": "1d7",
+            "damage": "1d6",
             "damage_type": "",
             "properties": "thrown (range 20/60) | versatile (1d8) | requires attunement",
             "cost": "80000"
