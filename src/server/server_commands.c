@@ -3456,7 +3456,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     for (int i = 0; i < MAX_NPCS; i++)
       if (npcs[i].active && npcs[i].archetype == ARCH_MERCHANT &&
           npcs[i].floor_id == c->floor_id &&
-          abs(npcs[i].x - c->x) + abs(npcs[i].y - c->y) <= 2) {
+          /*Same reach as list/browse/buy/sell (4 steps): at 3-4 steps
+           * 'talk' said "No merchants nearby" while 'list' worked.*/
+          abs(npcs[i].x - c->x) + abs(npcs[i].y - c->y) <= 4) {
         send_text_to_client(c->sock,
             "[%s] Welcome! Commands: 'list', 'browse <n>', 'buy <n>', 'sell <n>',"
             " 'haggle buy/sell', 'identify [n]', 'repair [name]', 'uncurse', 'cure'.",
