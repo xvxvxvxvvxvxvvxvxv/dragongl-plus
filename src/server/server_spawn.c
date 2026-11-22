@@ -101,7 +101,8 @@ static bool is_item_matching_spec(int item_idx, MerchantSpecialization spec) {
             it->category == ITEM_AMMO);
   case ALCHEMIST:
     return (it->category == ITEM_CONSUMABLE &&
-            (strstr(it->name, "Potion") || strstr(it->name, "Antitoxin"))) ||
+            (strstr(it->name, "Potion") || strstr(it->name, "Antitoxin") ||
+             strstr(it->name, "Oil of"))) ||
            it->category == ITEM_FUEL;
   case MAGIC_SHOP:
     return (it->category == ITEM_RING || it->category == ITEM_NECK ||
