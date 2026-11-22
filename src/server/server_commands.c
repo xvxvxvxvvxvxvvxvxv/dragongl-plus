@@ -4735,7 +4735,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       last_valid_y = curr_y;
 
       for (int i = 0; i < MAX_NPCS; i++) {
-        if (npcs[i].active && npcs[i].floor_id == c->floor_id && npcs[i].x == curr_x && npcs[i].y == curr_y && npcs[i].archetype != ARCH_TREASURE && npcs[i].archetype != ARCH_GOLD) {
+        if (npcs[i].active && npcs[i].floor_id == c->floor_id && npcs[i].x == curr_x && npcs[i].y == curr_y && npcs[i].archetype != ARCH_TREASURE && npcs[i].archetype != ARCH_GOLD &&
+            npcs[i].archetype != ARCH_MERCHANT) { /*merchants cannot be harmed, as with melee and spells*/
           hit_npc_idx = i;
           break;
         }
