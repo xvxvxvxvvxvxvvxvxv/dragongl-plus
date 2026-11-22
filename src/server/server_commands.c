@@ -3026,8 +3026,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
                  m_impazienza; //The merchants are cunning and lose patience
     int p_total = p_roll + rules_get_modifier(c->cha);
 
-    send_text_to_client(c->sock, "> Your Roll: %d + %d = %d", p_roll,
-                        rules_get_modifier(c->cha), p_total);
+    int cha_mod = rules_get_modifier(c->cha);
+    send_text_to_client(c->sock, "> Your Roll: %d %c %d = %d", p_roll,
+                        cha_mod < 0 ? '-' : '+', abs(cha_mod), p_total);
     send_text_to_client(c->sock, "> Merchant Roll: %d (Impatience: +%d)",
                         m_roll - m_impazienza, m_impazienza);
 
