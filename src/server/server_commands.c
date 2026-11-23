@@ -3026,8 +3026,9 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
                  m_impazienza; //The merchants are cunning and lose patience
     int p_total = p_roll + rules_get_modifier(c->cha);
 
-    send_text_to_client(c->sock, "> Your Roll: %d + %d = %d", p_roll,
-                        rules_get_modifier(c->cha), p_total);
+    int cha_mod = rules_get_modifier(c->cha);
+    send_text_to_client(c->sock, "> Your Roll: %d %c %d = %d", p_roll,
+                        cha_mod < 0 ? '-' : '+', abs(cha_mod), p_total);
     send_text_to_client(c->sock, "> Merchant Roll: %d (Impatience: +%d)",
                         m_roll - m_impazienza, m_impazienza);
 
@@ -4734,7 +4735,8 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       last_valid_y = curr_y;
 
       for (int i = 0; i < MAX_NPCS; i++) {
-        if (npcs[i].active && npcs[i].floor_id == c->floor_id && npcs[i].x == curr_x && npcs[i].y == curr_y && npcs[i].archetype != ARCH_TREASURE && npcs[i].archetype != ARCH_GOLD) {
+        if (npcs[i].active && npcs[i].floor_id == c->floor_id && npcs[i].x == curr_x && npcs[i].y == curr_y && npcs[i].archetype != ARCH_TREASURE && npcs[i].archetype != ARCH_GOLD &&
+            npcs[i].archetype != ARCH_MERCHANT) { /*merchants cannot be harmed, as with melee and spells*/
           hit_npc_idx = i;
           break;
         }

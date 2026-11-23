@@ -1,3 +1,11 @@
+* Sun Nov 22 2026 DragonGL+ - 2026.11.22.01
+- COMBAT: thrown items fly past merchants instead of hitting them (a
+  throw could kill a town merchant and award XP).
+- ITEMS: Oil of Sharpness, Oil of Etherealness and Oil of Slipperiness
+  are magic consumables used like potions; they were loaded as lantern
+  fuel ("Fuel, 8000 turns", and "use" asked for a lantern).
+- TEXT: the haggle roll shows a negative Charisma modifier as
+  "7 - 2 = 5" instead of "7 + -2 = 5".
 * Sat Nov 21 2026 DragonGL+ - 2026.11.21.01
 - SHOPS: "talk" finds a merchant up to 4 steps away, like "list",
   "buy" and "sell" (from 3-4 steps it said "No merchants nearby").

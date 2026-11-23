@@ -522,39 +522,26 @@ static bool load_items_json(const char* filepath) {
                     }
                 }
             } else if (strcmp(cat_str, "POTIONS_OILS") == 0) {
-                bool is_oil = false;
+                /* The oils of this category (Oil of Sharpness, of
+                 * Etherealness, of Slipperiness) are magic unguents, used
+                 * like potions. Lantern oil is "Oil (flask)", an
+                 * ADVENTURING_GEAR item handled below: these used to be
+                 * turned into 8000-turn lantern fuel too. */
+                item_database[i].category = ITEM_CONSUMABLE;
+                item_database[i].max_stack = 5;
+                item_database[i].weight = 1.0f;
+                item_database[i].needs_id = true;
                 if (name) {
                     if (cJSON_IsString(name)) {
-                        if (my_strcasestr(name->valuestring, "oil")) {
-                            if (!my_strcasestr(name->valuestring, "potion")) {
-                                is_oil = true;
-                            }
-                        }
-                    }
-                }
-                if (is_oil) {
-                    item_database[i].category = ITEM_FUEL;
-                    item_database[i].duration_turns = 8000;
-                    item_database[i].max_durability = 8000;
-                    item_database[i].max_stack = 1;
-                    item_database[i].weight = 1.0f;
-                } else {
-                    item_database[i].category = ITEM_CONSUMABLE;
-                    item_database[i].max_stack = 5;
-                    item_database[i].weight = 1.0f;
-                    item_database[i].needs_id = true;
-                    if (name) {
-                        if (cJSON_IsString(name)) {
-                            if (my_strcasestr(name->valuestring, "Healing")) {
-                                if (my_strcasestr(name->valuestring, "Greater")) {
-                                    item_database[i].heal_amount = 40;
-                                } else if (my_strcasestr(name->valuestring, "Superior")) {
-                                    item_database[i].heal_amount = 80;
-                                } else if (my_strcasestr(name->valuestring, "Supreme")) {
-                                    item_database[i].heal_amount = 120;
-                                } else {
-                                    item_database[i].heal_amount = 20;
-                                }
+                        if (my_strcasestr(name->valuestring, "Healing")) {
+                            if (my_strcasestr(name->valuestring, "Greater")) {
+                                item_database[i].heal_amount = 40;
+                            } else if (my_strcasestr(name->valuestring, "Superior")) {
+                                item_database[i].heal_amount = 80;
+                            } else if (my_strcasestr(name->valuestring, "Supreme")) {
+                                item_database[i].heal_amount = 120;
+                            } else {
+                                item_database[i].heal_amount = 20;
                             }
                         }
                     }
