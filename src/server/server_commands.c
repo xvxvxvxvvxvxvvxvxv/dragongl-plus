@@ -4485,8 +4485,15 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         return;
     }
 
+    /*"get 5" with two objects here used to silently pick up the first one.*/
+    if (target_idx > count) {
+        send_text_to_client(c->sock, "[SYSTEM] There is no object %d here (%d %s).",
+                            target_idx, count, count == 1 ? "object" : "objects");
+        return;
+    }
+
     if (count == 1 || target_idx > 0) {
-        int pick = (target_idx > 0 && target_idx <= count) ? items[target_idx - 1] : items[0];
+        int pick = (target_idx > 0) ? items[target_idx - 1] : items[0];
         NPC *n = &npcs[pick];
         if (n->archetype == ARCH_GOLD) {
             c->gold += n->gold_drop;
