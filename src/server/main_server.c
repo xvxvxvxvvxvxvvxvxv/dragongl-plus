@@ -21,11 +21,13 @@
 #include "wire.h"
 #include "server_conn.h"
 #include "server_options.h"
+#include "legacy_import.h"
 #include "server_tls.h"
 #include "writer.h"
 #include <errno.h>
 #include <sys/epoll.h>
 #include <signal.h>
+#include <unistd.h>
 
 #include "aoe.h"
 #include "server_internal.h"
@@ -52,6 +54,8 @@ _Static_assert(BOOKS_MARTIAL == SHOP_SPEC_BOOKS_MARTIAL,
 * path, so clog_close() can write the closing bracket of
 * combat_log.json.*/
 static volatile sig_atomic_t g_shutdown_requested = 0;
+/*DragonGL+: the file whose appearance asks for a clean shutdown (--stop-file)*/
+static const char *g_stop_file;
 
 /*epoll data.u32 of the descriptors that are not client slots (a client is
  * identified by its slot index, 0..MAX_CLIENTS-1).*/
@@ -328,7 +332,16 @@ static void run_server(int s_sock, int epoll_fd, Client *clients, Game *game) {
     struct epoll_event ep_events[MAX_CLIENTS + 2 + CONN_REFUSAL_SLOTS];
     long long last_iter_ms = 0;
     long long tick_acc_ms = 0;
+    long long stop_checked_ms = 0;
     while (!g_shutdown_requested) {
+        if (g_stop_file && get_time_ms() - stop_checked_ms >= 1000) {
+            stop_checked_ms = get_time_ms();
+            if (access(g_stop_file, F_OK) == 0) {
+                server_log("SYS", "Stop file found: shutting down.");
+                g_shutdown_requested = 1;
+                break;
+            }
+        }
         int n_events =
             epoll_wait(epoll_fd, ep_events, (int)(sizeof(ep_events) / sizeof(ep_events[0])),
                        (int)(TICK_MS / 2));
@@ -411,13 +424,13 @@ static void shutdown_server(Client *clients, Game *game) {
 
 /*Listening socket and epoll set, with the listener registered. False if
  * either cannot be created.*/
-static bool open_listener(int port, int *s_sock, int *epoll_fd) {
-    *s_sock = net_create_server(port);
+static bool open_listener(int port, bool local, int *s_sock, int *epoll_fd) {
+    *s_sock = local ? net_create_server_local(port) : net_create_server(port);
     if (*s_sock < 0) {
         server_log("SYS", "Cannot bind to port %d", port);
         return false;
     }
-    server_log("SYS", "Listening on port %d", port);
+    server_log("SYS", "Listening on port %d%s", port, local ? " (this computer only)" : "");
     net_set_nonblocking(*s_sock);
     *epoll_fd = epoll_create1(EPOLL_CLOEXEC);
     if (*epoll_fd == -1) {
@@ -511,7 +524,8 @@ int main(int argc, char **argv) {
     }
     install_signal_handlers();
     int s_sock = -1, epoll_fd = -1;
-    if (!open_listener(opt.port, &s_sock, &epoll_fd)) {
+    g_stop_file = opt.stop_file;
+    if (!open_listener(opt.port, opt.local != 0, &s_sock, &epoll_fd)) {
         clog_close();
         return 1;
     }
@@ -541,6 +555,14 @@ int main(int argc, char **argv) {
     if (!start_workers(epoll_fd)) {
         clog_close();
         return 1;
+    }
+    if (opt.import_dir) {
+        const char *pw = getenv("DRAGONGL_IMPORT_PASSWORD");
+        int n = legacy_import_saves(opt.import_dir, pw);
+        if (n > 0) {
+            server_log("SYS", "Imported %d character(s) of DragonGL+ 2026.10 from %s", n,
+                       opt.import_dir);
+        }
     }
     server_log("SYS", "Server ready!");
     run_server(s_sock, epoll_fd, clients, game);

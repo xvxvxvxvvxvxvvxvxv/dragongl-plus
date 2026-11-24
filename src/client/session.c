@@ -35,8 +35,12 @@
 #include <stdlib.h>
 #include <time.h>
 #ifndef _WIN32
+#include <fcntl.h>
 #include <sys/socket.h>
 #endif
+#include <openssl/pem.h>
+#include <openssl/x509.h>
+#include "tls_common.h"
 
 static pthread_t s_thread;
 static bool s_thread_live;
@@ -147,9 +151,33 @@ static int connect_and_login(long long deadline) {
     return sock;
 }
 
+/*Play Solo: the private server writes its certificate at its first
+ * start; the client trusts exactly that certificate (no prompt, no
+ * known_servers entry). Waits for the file until the deadline.*/
+static bool pin_solo_certificate(long long deadline) {
+    char path[1200];
+    snprintf(path, sizeof(path), "%s/tls/server.crt", s_info.cert_dir);
+    for (;;) {
+        FILE *f = fopen(path, "r");
+        if (f) {
+            X509 *cert = PEM_read_X509(f, NULL, NULL, NULL);
+            fclose(f);
+            bool ok = cert && tls_cert_fingerprint(cert, s_info.fingerprint, sizeof(s_info.fingerprint));
+            X509_free(cert);
+            if (ok) return true;
+        }
+        if (atomic_load(&s_stop) || plat_time_ms() >= deadline) break;
+        set_status("Waiting for the world to be forged...");
+        plat_sleep_ms(300);
+    }
+    set_error("The private server did not start (no certificate).");
+    return false;
+}
+
 static void *session_thread(void *arg) {
     (void)arg;
     long long deadline = plat_time_ms() + (s_info.retry_ms > 0 ? s_info.retry_ms : 0);
+    if (s_info.cert_dir[0] && !pin_solo_certificate(deadline)) return NULL;
     if (connect_and_login(deadline) < 0) return NULL;
     net_thread_loop(NULL);
     if (!g_net_rx_any && atomic_load(&g_net_status) == NET_DISCONNECTED) {
@@ -208,6 +236,12 @@ static char s_dir[1024];
 static char s_log[1100];
 static char s_stop_file[1100];
 
+const char *local_server_state_dir(void) {
+    static char state[1100];
+    if (!state[0]) snprintf(state, sizeof(state), "%s/world5", local_server_dir());
+    return state;
+}
+
 const char *local_server_dir(void) {
     if (!s_dir[0]) {
         char base[900];
@@ -260,18 +294,44 @@ bool local_server_start(int port, const char *password, char *err, int err_len) 
     }
     *strrchr(data, '/') = '\0';
     const char *dir = local_server_dir();
-    char state[1100];
-    snprintf(state, sizeof(state), "%s/world", dir);
+    const char *state = local_server_state_dir();
     plat_mkdirs(state);
     snprintf(s_log, sizeof(s_log), "%s/server.log", dir);
     snprintf(s_stop_file, sizeof(s_stop_file), "%s/stop.request", dir);
     remove(s_stop_file);
     char port_s[16];
     snprintf(port_s, sizeof(port_s), "%d", port);
-    char pw[64];
-    snprintf(pw, sizeof(pw), "%s", password);
-    char *argv[] = {exe, "--local", "-P", port_s, "-p", pw, "-D", data, "-S", state,
-                    "--stop-file", s_stop_file, NULL};
+    /*The server reads its access password from a file only the player
+     * can read (never from the command line).*/
+    char pw_file[1100];
+    snprintf(pw_file, sizeof(pw_file), "%s/server-password", dir);
+    remove(pw_file);
+#ifndef _WIN32
+    int fd = open(pw_file, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    FILE *pf = fd >= 0 ? fdopen(fd, "w") : NULL;
+#else
+    FILE *pf = fopen(pw_file, "w");
+#endif
+    if (!pf) {
+        snprintf(err, (size_t)err_len, "Cannot write %s.", pw_file);
+        return false;
+    }
+    fprintf(pf, "%s\n", password);
+    fclose(pf);
+    char state_arg[1100];
+    snprintf(state_arg, sizeof(state_arg), "%s", state);
+    /*Heroes of DragonGL+ 2026.10 (its solo server kept them in
+     * <solo>/saves) are imported once into the new world, with the solo
+     * hero password.*/
+    char legacy[1100];
+    snprintf(legacy, sizeof(legacy), "%s/saves", dir);
+#ifdef _WIN32
+    _putenv_s("DRAGONGL_IMPORT_PASSWORD", SOLO_HERO_PASSWORD);
+#else
+    setenv("DRAGONGL_IMPORT_PASSWORD", SOLO_HERO_PASSWORD, 1);
+#endif
+    char *argv[] = {exe, "--local", "-P", port_s, "--password-file", pw_file, "-D", data,
+                    "-S", state_arg, "--stop-file", s_stop_file, "--import-legacy", legacy, NULL};
     if (!plat_spawn(&s_proc, exe, argv, dir, s_log)) {
         snprintf(err, (size_t)err_len, "Could not start the server program.");
         return false;

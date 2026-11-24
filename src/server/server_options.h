@@ -17,6 +17,14 @@ typedef struct {
     const char *state_dir;
     const char *tls_cert;
     const char *tls_key;
+    /*DragonGL+ ("Play Solo"): listen on the loopback address only, and
+     * shut down cleanly when stop_file appears.*/
+    int local;
+    const char *stop_file;
+    /*DragonGL+: directory of character files of DragonGL+ 2026.10 to
+     * import at start-up (legacy_import.h); their new password comes from
+     * DRAGONGL_IMPORT_PASSWORD.*/
+    const char *import_dir;
 } ServerOptions;
 
 /* Parse argv into o (the strings point into argv). -1 to go on,

@@ -36,6 +36,12 @@ static void print_server_usage(const char *argv0) {
            "      --tls-key <file>       private key. Default: <state>/tls/server.crt\n"
            "                             and server.key, created at the first start\n"
            "                             (self-signed; clients pin its fingerprint)\n"
+           "      --local                Listen on the loopback address only (the\n"
+           "                             private server of \"Play Solo\")\n"
+           "      --stop-file <file>     Save everything and exit when <file> appears\n"
+           "      --import-legacy <dir>  Import the characters of DragonGL+ 2026.10\n"
+           "                             found in <dir> (password: the variable\n"
+           "                             DRAGONGL_IMPORT_PASSWORD)\n"
            "      --print-commands       Write the reference of the game commands\n"
            "                             (Markdown: docs/COMMANDS.md) and exit\n"
            "  -h, --help                 Show this help\n"
@@ -72,7 +78,11 @@ int parse_options(int argc, char **argv, ServerOptions *o) {
                     argv[0]);
             return 2;
         }
-        bool takes_value = strcmp(opt, "-P") == 0 || strcmp(opt, "--port") == 0 ||
+        if (strcmp(opt, "--local") == 0) {
+            o->local = 1;
+            continue;
+        }
+        bool takes_value = strcmp(opt, "--stop-file") == 0 || strcmp(opt, "--import-legacy") == 0 || strcmp(opt, "-P") == 0 || strcmp(opt, "--port") == 0 ||
                            strcmp(opt, "-D") == 0 || strcmp(opt, "--data-dir") == 0 ||
                            strcmp(opt, "-S") == 0 || strcmp(opt, "--state-dir") == 0 ||
                            strcmp(opt, "--password-file") == 0 ||
@@ -103,6 +113,10 @@ int parse_options(int argc, char **argv, ServerOptions *o) {
             o->password_file = val;
         } else if (strcmp(opt, "--tls-cert") == 0) {
             o->tls_cert = val;
+        } else if (strcmp(opt, "--stop-file") == 0) {
+            o->stop_file = val;
+        } else if (strcmp(opt, "--import-legacy") == 0) {
+            o->import_dir = val;
         } else if (strcmp(opt, "--tls-key") == 0) {
             o->tls_key = val;
         } else {

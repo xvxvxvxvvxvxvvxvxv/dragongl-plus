@@ -29,6 +29,10 @@
 
 #include <stdbool.h>
 
+/*Password of the heroes of "Play Solo" (the private server is reachable
+ * from this computer only).*/
+#define SOLO_HERO_PASSWORD "dragongl-solo"
+
 typedef struct {
     char host[128];
     int port;
@@ -44,6 +48,9 @@ typedef struct {
     /*SHA-256 fingerprint the server certificate must have (solo: the
      * certificate of the bundled server); "" = trust on first use.*/
     char fingerprint[112];
+    /*Play Solo: state directory of the private server; its certificate
+     * (<cert_dir>/tls/server.crt) is pinned.*/
+    char cert_dir[1100];
 } LoginInfo;
 
 bool session_start(const LoginInfo *info);
@@ -60,5 +67,7 @@ bool local_server_running(void);
 void local_server_log_tail(char *out, int cap);
 /*Directory holding the solo world (user profile).*/
 const char *local_server_dir(void);
+/*State directory of the solo server (world, saves, certificate).*/
+const char *local_server_state_dir(void);
 
 #endif

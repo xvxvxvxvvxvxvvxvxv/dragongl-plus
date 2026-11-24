@@ -135,6 +135,9 @@ set(DRAGONGL_SERVER_LIB_SRCS
     "${DRAGONGL_ROOT}/src/server/ground_journal.c"
     "${DRAGONGL_ROOT}/src/server/server_tls.c"
     "${DRAGONGL_ROOT}/src/server/server_options.c"
+    # DragonGL+: characters of DragonGL+ 2026.10 (--import-legacy)
+    "${DRAGONGL_ROOT}/src/server/legacy_import.c"
+    "${DRAGONGL_ROOT}/src/server/legacy_tables.c"
 )
 set(DRAGONGL_SERVER_SRCS "${DRAGONGL_ROOT}/src/server/main_server.c" ${DRAGONGL_SERVER_LIB_SRCS})
 

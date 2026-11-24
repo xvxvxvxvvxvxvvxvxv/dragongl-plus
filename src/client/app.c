@@ -164,8 +164,11 @@ void app_start_session(const LoginInfo *li, bool solo) {
             return;
         }
         g_app.login.retry_ms = 90000; /*first launch generates 100 floors*/
+        snprintf(g_app.login.cert_dir, sizeof(g_app.login.cert_dir), "%s", local_server_state_dir());
+        g_app.login.fingerprint[0] = '\0';
     } else {
         g_app.login.retry_ms = 0;
+        g_app.login.cert_dir[0] = '\0';
     }
     session_start(&g_app.login);
     app_set_screen(SCR_CONNECTING);

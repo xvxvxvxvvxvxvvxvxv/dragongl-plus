@@ -35,7 +35,7 @@
 /* Listening socket on every address: IPv6 with IPV6_V6ONLY off (IPv4
  * clients arrive as ::ffff:a.b.c.d), or IPv4 only where the host has no
  * IPv6. Close-on-exec, SO_REUSEADDR. */
-static int listen_on(int family, int port) {
+static int listen_on(int family, int port, bool loopback) {
     int sock = socket(family, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (sock < 0) {
         return -1;
@@ -49,13 +49,13 @@ static int listen_on(int family, int port) {
         setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
         struct sockaddr_in6 *a6 = (struct sockaddr_in6 *)&ss;
         a6->sin6_family = AF_INET6;
-        a6->sin6_addr = in6addr_any;
+        a6->sin6_addr = loopback ? in6addr_loopback : in6addr_any;
         a6->sin6_port = htons((uint16_t)port);
         len = sizeof(*a6);
     } else {
         struct sockaddr_in *a4 = (struct sockaddr_in *)&ss;
         a4->sin_family = AF_INET;
-        a4->sin_addr.s_addr = htonl(INADDR_ANY);
+        a4->sin_addr.s_addr = htonl(loopback ? INADDR_LOOPBACK : INADDR_ANY);
         a4->sin_port = htons((uint16_t)port);
         len = sizeof(*a4);
     }
@@ -69,10 +69,20 @@ static int listen_on(int family, int port) {
 }
 
 int net_create_server(int port) {
-    int sock = listen_on(AF_INET6, port);
+    int sock = listen_on(AF_INET6, port, false);
     if (sock < 0 && (errno == EAFNOSUPPORT || errno == EADDRNOTAVAIL)) {
-        sock = listen_on(AF_INET, port);
+        sock = listen_on(AF_INET, port, false);
     }
+    if (sock < 0) {
+        perror("bind");
+    }
+    return sock;
+}
+
+/* DragonGL+: the loopback address only (127.0.0.1; the client of "Play
+ * Solo" connects there), for the private server of one player. */
+int net_create_server_local(int port) {
+    int sock = listen_on(AF_INET, port, true);
     if (sock < 0) {
         perror("bind");
     }

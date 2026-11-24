@@ -59,7 +59,8 @@ static bool has_bestiary(const char *dir) {
 }
 
 /*Data directory (read-only JSON). In order: --data-dir (taken as given),
- * $DRAGONGL_DATA_DIR, the data/ of the source tree when the binary runs
+ * $DRAGONGL_DATA_DIR, the data/ next to the program (portable packages),
+ * the data/ of the source tree when the binary runs
  * from a build directory (<exe>/../data), the installed
  * DRAGONGL_PKGDATADIR/data. The current directory is not searched.*/
 void resolve_data_dir(Game *game) {
@@ -79,8 +80,15 @@ void resolve_data_dir(Game *game) {
         if (slash) {
             *slash = '\0';
             char cand[sizeof(exe) + 16];
-            snprintf(cand, sizeof(cand), "%s/../data", exe);
             char real[4096];
+            /*DragonGL+: the portable packages keep data/ next to the program*/
+            snprintf(cand, sizeof(cand), "%s/data", exe);
+            if (strlen(cand) < sizeof(real) && realpath(cand, real) && has_bestiary(real) &&
+                strlen(real) < sizeof(game->data_dir)) {
+                copy_str(game->data_dir, real, sizeof(game->data_dir));
+                return;
+            }
+            snprintf(cand, sizeof(cand), "%s/../data", exe);
             if (strlen(cand) < sizeof(real) && realpath(cand, real) && has_bestiary(real) &&
                 strlen(real) < sizeof(game->data_dir)) {
                 copy_str(game->data_dir, real, sizeof(game->data_dir));

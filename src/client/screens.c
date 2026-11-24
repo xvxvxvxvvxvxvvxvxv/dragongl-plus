@@ -242,31 +242,42 @@ static void draw_title(void) {
 /* Solo                                                                */
 /* ------------------------------------------------------------------ */
 
-static void scan_solo_heroes(void) {
-    g_app.solo_nheroes = 0;
-    char dir[1100];
-    snprintf(dir, sizeof(dir), "%s/saves", local_server_dir());
+static void scan_hero_dir(const char *dir) {
     DIR *d = opendir(dir);
     if (!d) return;
     struct dirent *e;
     while ((e = readdir(d)) != NULL && g_app.solo_nheroes < 16) {
         size_t n = strlen(e->d_name);
         if (n > 5 && n < 37 && strcmp(e->d_name + n - 5, ".save") == 0) {
-            memcpy(g_app.solo_heroes[g_app.solo_nheroes], e->d_name, n - 5);
-            g_app.solo_heroes[g_app.solo_nheroes][n - 5] = '\0';
+            char name[32];
+            memcpy(name, e->d_name, n - 5);
+            name[n - 5] = '\0';
+            bool dup = false;
+            for (int i = 0; i < g_app.solo_nheroes; i++)
+                if (strcmp(g_app.solo_heroes[i], name) == 0) dup = true;
+            if (dup) continue;
+            copy_str(g_app.solo_heroes[g_app.solo_nheroes], name, sizeof(g_app.solo_heroes[0]));
             g_app.solo_nheroes++;
         }
     }
     closedir(d);
 }
 
-#define SOLO_PASSWORD "dragongl-solo"
+static void scan_solo_heroes(void) {
+    g_app.solo_nheroes = 0;
+    char dir[1100];
+    snprintf(dir, sizeof(dir), "%s/saves", local_server_state_dir());
+    scan_hero_dir(dir);
+    /*heroes of DragonGL+ 2026.10: imported when the solo server starts*/
+    snprintf(dir, sizeof(dir), "%s/saves", local_server_dir());
+    scan_hero_dir(dir);
+}
 
 static void solo_login(const char *name, bool is_new) {
     LoginInfo li;
     memset(&li, 0, sizeof(li));
     copy_str(li.user, name, sizeof(li.user));
-    copy_str(li.pass, SOLO_PASSWORD, sizeof(li.pass));
+    copy_str(li.pass, SOLO_HERO_PASSWORD, sizeof(li.pass));
     li.is_new = is_new;
     if (!is_new) app_start_session(&li, true);
     else {

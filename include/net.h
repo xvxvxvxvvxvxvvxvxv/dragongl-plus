@@ -26,6 +26,8 @@
 /* Listening TCP socket on every local address (IPv6 dual-stack, or IPv4
  * where IPv6 is unavailable); -1 on error. */
 int net_create_server(int port);
+/* DragonGL+: listen on 127.0.0.1 only (the private "Play Solo" server). */
+int net_create_server_local(int port);
 /* Connect to host (name, IPv4 or IPv6 address) within timeout_ms per
  * address tried. The socket is non-blocking, close-on-exec, with TCP
  * keepalive. Returns -1 with a reason in why on failure. */
