@@ -3132,24 +3132,46 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
     }
     //Optional argument parsing: "identify 3" or "identify sword"
     int target_idx = -1;
-    if (cmd[8] == ' ') {
-      const char *arg = cmd + 9;
-      if (isdigit(arg[0])) {
+    const char *arg = (cmd[8] == ' ') ? cmd + 9 : "";
+    while (*arg == ' ') arg++;
+    if (arg[0] != '\0') {
+      if (isdigit((unsigned char)arg[0])) {
         int n = atoi(arg) - 1;
-        if (n >= 0 && n < c->backpack_count && !c->backpack[n].is_identified)
-          target_idx = n;
+        if (n < 0 || n >= c->backpack_count) {
+          send_text_to_client(c->sock,
+              "[ERROR] Item not found in backpack.");
+          return;
+        }
+        if (c->backpack[n].is_identified) {
+          send_text_to_client(c->sock,
+              "[ALCHEMIST] That item is already identified.");
+          return;
+        }
+        target_idx = n;
       } else {
+        /*Unidentified items only: a name that matched an item already
+         * identified (e.g. the starting book) charged another 100gp
+         * for nothing, even with an unknown item in the backpack.
+         * A name matching no unknown item used to identify (and charge
+         * for) the LAST unidentified item instead.*/
         for (int i = 0; i < c->backpack_count; i++) {
           if (c->backpack[i].is_identified)
             continue;
-          /*Unidentified items only: a name that matched an item already
-           * identified (e.g. the starting book) charged another 100gp
-           * for nothing, even with an unknown item in the backpack.*/
-          target_idx = i;
           const char *iname = item_database[c->backpack[i].template_idx].name;
           if (strcasecmp(iname, arg) == 0) {
+            target_idx = i;
             break;
           }
+        }
+        bool any_unknown = false;
+        for (int i = 0; i < c->backpack_count; i++)
+          if (!c->backpack[i].is_identified)
+            any_unknown = true;
+        if (target_idx == -1 && any_unknown) {
+          send_text_to_client(c->sock,
+              "[ALCHEMIST] Choose the unknown item by its backpack number "
+              "(e.g. 'identify 3').");
+          return;
         }
       }
     } else {
