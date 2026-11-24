@@ -1,0 +1,9 @@
+# Dragon GL - Copyright (C) 2026 Nicola Taibi
+# SPDX-License-Identifier: GPL-3.0-or-later
+# rpmlint filters for dragongl.spec: every entry is intended, and every one
+# must match something (rpmlint reports an unused filter as an error).
+
+# Data and documentation have their own package.
+addFilter(r"dragongl-data\.noarch: W: no-documentation")
+# Words the dictionary does not know.
+addFilter(r"E: spelling-error \('(Vulkan|unprivileged|DynamicUser)'")

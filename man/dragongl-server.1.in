@@ -1,0 +1,107 @@
+.\" Dragon GL - Copyright (C) 2026 Nicola Taibi
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH DRAGONGL-SERVER 1 "@DRAGONGL_RELEASE_DATE@" "Dragon GL @DRAGONGL_VERSION@" "User Commands"
+.SH NAME
+dragongl-server \- Dragon GL server launcher script
+.SH SYNOPSIS
+.B dragongl-server
+.RB [ \-\-password\-file
+.IR file ]
+.RB [ \-\-dm\-password\-file
+.IR file ]
+.RB [ \-P | \-\-port
+.IR port ]
+.RB [ \-D | \-\-data\-dir
+.IR dir ]
+.RB [ \-S | \-\-state\-dir
+.IR dir ]
+.RB [ \-h | \-\-help ]
+.SH DESCRIPTION
+.B dragongl-server
+starts the Dragon GL game server
+.BR dragongl_server (1).
+It runs the binary installed next to it, or
+.I build/dragongl_server
+in a development tree. There the server finds the
+.I data/
+directory of the source tree by itself, and unless a state directory is
+given the launcher keeps the server state in the git-ignored
+.I state/
+directory of the project root.
+.PP
+Before starting the server it prints diagnostic information about the host
+(operating system, uptime and load, memory, disk space, network
+interfaces). The block includes the machine's IP addresses: set
+.B DIAGNOSTICS=0
+to skip it.
+.PP
+Passwords are never accepted on the command line, where every local user
+can read them with
+.BR ps (1).
+The server access password comes from
+.BR \-\-password\-file ,
+from
+.BR DRAGONGL_SERVER_PASSWORD ,
+or, when the launcher runs on a terminal, from a prompt that also asks for
+the optional Dungeon Master password. The passwords reach the server
+through its environment, which the server wipes at start-up.
+.SH OPTIONS
+.TP
+.BI \-\-password\-file " file"
+Read the server access password from the first line of
+.IR file .
+.TP
+.BI \-\-dm\-password\-file " file"
+Read the Dungeon Master password from the first line of
+.IR file .
+Without a DM password the
+.B dm
+account is disabled.
+.TP
+.BR \-P ", " \-\-port " \fIport\fR"
+TCP port to listen on (default 8080).
+.TP
+.BR \-D ", " \-\-data\-dir " \fIdir\fR"
+Data directory (see
+.BR dragongl_server (1)).
+.TP
+.BR \-S ", " \-\-state\-dir " \fIdir\fR"
+State directory: world, NPCs, characters, logs (see
+.BR dragongl_server (1)).
+.TP
+.BR \-h ", " \-\-help
+Show a short help message and exit.
+.SH ENVIRONMENT
+.TP
+.B DRAGONGL_SERVER_PASSWORD
+Server access password, used when no
+.B \-\-password\-file
+is given.
+.TP
+.B DRAGONGL_DM_PASSWORD
+Dungeon Master password (optional).
+.TP
+.B DIAGNOSTICS
+Set to 0 to skip the host diagnostics block.
+.SH EXAMPLES
+Start interactively (the launcher asks for the passwords):
+.PP
+.RS
+.B dragongl-server
+.RE
+.PP
+Start from password files on another port:
+.PP
+.RS
+.B chmod 600 server.pw dm.pw
+.br
+.B dragongl-server \-\-password\-file server.pw \-\-dm\-password\-file dm.pw \-\-port 9000
+.RE
+.SH SEE ALSO
+.BR dragongl_server (1),
+.BR dragongl-client (1),
+.BR dragongl-reset-world (1)
+.SH AUTHOR
+Nicola Taibi <nicola.taibi.1967@gmail.com>
+.SH LICENSE
+GPL-3.0-or-later

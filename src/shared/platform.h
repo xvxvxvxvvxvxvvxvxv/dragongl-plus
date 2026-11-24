@@ -97,6 +97,9 @@ bool plat_sock_would_block(void);
 void plat_sock_close(int sock);
 /*Make a socket non-blocking.*/
 void plat_sock_set_nonblocking(int sock);
+/*Wait until sock is readable: >0 readable (or closed by the peer),
+ * 0 timeout, <0 error. poll() on POSIX, WSAPoll() on Windows.*/
+int plat_poll_read(int sock, int timeout_ms);
 /*Sleep for ms milliseconds.*/
 void plat_sleep_ms(int ms);
 /*Monotonic clock in milliseconds.*/

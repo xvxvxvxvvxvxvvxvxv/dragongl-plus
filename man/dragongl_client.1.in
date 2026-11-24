@@ -1,0 +1,232 @@
+.\" Dragon GL - Copyright (C) 2026 Nicola Taibi
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH DRAGONGL_CLIENT 1 "@DRAGONGL_RELEASE_DATE@" "Dragon GL @DRAGONGL_VERSION@" "User Commands"
+.SH NAME
+dragongl_client \- Dragon GL 3D game client
+.SH SYNOPSIS
+.B dragongl_client
+[\fB\-\-fingerprint\fR \fIsha256\fR] [\fB\-\-ui\-scale\fR \fIn\fR]
+[\fB\-\-frames\fR \fIn\fR] [\fIserver_host\fR [\fIport\fR]]
+.br
+.B dragongl_client \-\-print\-config
+.br
+.B dragongl_client
+.BR \-h " | " \-\-help " | " \-V " | " \-\-version
+.SH DESCRIPTION
+.B dragongl_client
+is the 3D client of the Dragon GL dungeon crawler. It connects to a
+.BR dragongl_server ,
+lets the player create or load a character, and renders the dungeon in
+real time with a graphical HUD (stats, minimap, equipment, boss trophies,
+compass).
+
+Unless
+.I server_host
+is given on the command line, the client asks for the server host
+(default 127.0.0.1), then for the server password and the player
+credentials (passwords are read without echo); new players then choose
+race, class and alignment.
+
+The map is received from the server in chunks: the client generates no
+local world.
+.SS Rendering
+The client renders with Vulkan 1.3 and dynamic rendering. The scene is
+GPU-driven: compute shaders cull the tile and entity instances around the
+player and generate their geometry, and a single indirect draw renders
+it. It needs a GPU whose driver supports Vulkan 1.3 with a queue family
+for graphics, compute and presentation to the window. At start-up the
+client lists the GPUs it found and the one it uses (discrete before
+integrated before software, then the most device memory).
+
+The window opens at 80% of the screen and can be resized freely; the
+swapchain is rebuilt on resize and whenever the driver reports it out of
+date. Closing the window or pressing Escape quits.
+
+When the driver reports the device or the surface lost (a driver update or
+reset, a GPU removed), the client rebuilds the renderer on the same window
+and the game goes on; after three losses in one session it exits with the
+reason. At exit it prints how many frames it drew and their times (median,
+99th percentile, maximum).
+.SS Window and keys
+The HUD shows the character (hit points as a bar and as numbers, vitality,
+experience, gold, armour class, abilities, spell slots, conditions), the
+minimap, the equipment, the boss trophies and the last messages of the
+server. Its size follows the monitor scale and the height of the window;
+.B Ctrl+=
+and
+.B Ctrl+\-
+change it.
+
+Commands are typed in the window:
+.B Enter
+or
+.B /
+opens the command line,
+.B Enter
+sends it,
+.B Escape
+cancels it. While typing: Left, Right, Home, End, Ctrl+Left and Ctrl+Right
+(by word), Backspace, Delete, Ctrl+U and Ctrl+K (delete to the start or to
+the end), Up and Down (the last 64 commands). Commands may also be typed
+in the terminal that started the client, where every message of the server
+is printed as well.
+
+Default keys:
+.BR W ", " A ", " S ", " D
+or the arrows move;
+.BR Q " and " E
+turn the camera,
+.BR R " and " F
+raise and lower it,
+.BR PageUp " and " PageDown
+zoom (the mouse does the same: drag and wheel);
+.BR Shift+PageUp " and " Shift+PageDown
+scroll the messages;
+.B Tab
+shows or hides equipment and trophies (hidden by default in a narrow
+window);
+.B F3
+shows the frame time;
+.B F1
+lists the keys in use;
+.B Escape
+quits.
+.SS Settings file
+.I client.conf
+(see FILES) holds one setting per line,
+.IR "name = value" ;
+.B #
+starts a comment. A line that is not understood is reported with its
+number and the others apply.
+.TP
+.BR ui_scale " = " auto " | " \fIn\fR
+Size of the HUD, 0.5 to 4.
+.TP
+.BR reduce_motion " = " yes " | " no
+No particle effects, combat numbers stay where they appear, the water does
+not wave.
+.TP
+.BR show_fps " = " yes " | " no
+Frame time in the top right corner.
+.TP
+.BI key. action " = " "key\fR[\fB, \fIkey\fR]"
+The keys of an action (two at most, or
+.BR none ).
+A key is a letter, a digit, F1 to F25, a name (Enter, Escape, Tab, Space,
+Up, PageUp, KPAdd, Slash, Equal, ...) with optional
+.BR Shift+ ", " Ctrl+ ", " Alt+ .
+.B \-\-print\-config
+lists every action with its default keys.
+.TP
+.BI bind. key " = " command
+The key sends the command as if typed (32 at most), for example
+.BR "bind.F5 = look" .
+.SS Disconnection
+When the server closes the connection, stops answering (TCP keepalive,
+about 90 s) or sends a message the client cannot decode, the client prints
+the reason and exits. Server and client must speak the same protocol
+version.
+.SS Server identity
+The connection is TLS 1.3. Before it sends the login, the client accepts
+the server when its certificate has the fingerprint given with
+.BR \-\-fingerprint ,
+when an authority the system trusts signed it for
+.IR server_host ,
+or when
+.I known_servers
+(below) records that fingerprint for the host and port. At the first
+connection to a server with a self-signed certificate the client prints
+its fingerprint and records it: compare it with the one the server owner
+gives you (the server logs it at start-up). From then on a different
+certificate is refused with a warning that names the line to remove if the
+owner confirms the change.
+.SH ARGUMENTS
+.TP
+.I server_host
+Host name, IPv4 or IPv6 address of the game server (every address the
+name resolves to is tried, 5 s each).
+.TP
+.I port
+TCP port of the game server (default 8080).
+.SH OPTIONS
+.TP
+.BI \-\-fingerprint " sha256"
+Trust only the server certificate with this SHA-256 fingerprint
+(\fBSHA256:AB:CD:...\fR, or 64 hexadecimal digits) and record it in
+.IR known_servers ,
+replacing an older entry for that server.
+.TP
+.BI \-\-ui\-scale " n"
+Size of the HUD, 0.5 to 4; overrides
+.B ui_scale
+of the settings file.
+.TP
+.B \-\-print\-config
+Write the settings file with every default and key to standard output and
+exit. Redirect it to
+.I client.conf
+and edit it.
+.TP
+.BI \-\-frames " n"
+Draw
+.I n
+frames, print the frame times and exit (for measurements and tests).
+.TP
+.BR \-h ", " \-\-help
+Show the usage and exit.
+.TP
+.BR \-V ", " \-\-version
+Show the version and exit.
+.SH EXIT STATUS
+0 when the player quits or the server closes the connection; 1 when the
+connection, the login or the renderer fails; 2 for a wrong command line.
+.SH ENVIRONMENT
+.TP
+.B DRAGONGL_WINDOW
+Initial window size as
+.IR width x height ,
+e.g. 1920x1080.
+.TP
+.B DRAGONGL_GPU
+Use this GPU: its index in the start-up list, or part of its name.
+.TP
+.B DRAGONGL_VSYNC
+Set to 0 to present without waiting for vertical sync (mailbox or
+immediate mode, if the driver offers one).
+.TP
+.B DRAGONGL_SHADER_DIR
+Directory of the compiled shaders. By default they are read from
+.I shaders/
+next to the executable (build tree), then from
+.IR @DRAGONGL_PKGDATADIR@/shaders .
+.TP
+.B VK_INSTANCE_LAYERS
+Vulkan layers to enable, colon separated (for example
+.BR VK_LAYER_KHRONOS_validation );
+names the system does not provide are skipped with a warning.
+.SH FILES
+.TP
+.I @DRAGONGL_PKGDATADIR@/shaders/*.spv
+Compiled shaders.
+.TP
+.I $XDG_CONFIG_HOME/dragongl/client.conf
+Settings and keys
+.RI ( ~/.config/dragongl/client.conf
+without
+.BR XDG_CONFIG_HOME );
+optional.
+.TP
+.I $XDG_CONFIG_HOME/dragongl/known_servers
+Servers trusted by fingerprint
+.RI ( ~/.config/dragongl/known_servers
+without
+.BR XDG_CONFIG_HOME ):
+one line per server, \fIhost port sha256\fR, created with mode 0600.
+Remove a line to accept a new certificate of that server.
+.SH SEE ALSO
+.BR dragongl-client (1),
+.BR dragongl_server (1)
+.SH AUTHOR
+Nicola Taibi <nicola.taibi.1967@gmail.com>
+.SH LICENSE
+GPL-3.0-or-later

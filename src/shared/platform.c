@@ -34,6 +34,7 @@
 #else
 #include <fcntl.h>
 #include <signal.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <sys/random.h>
@@ -101,6 +102,15 @@ void plat_sock_close(int sock) {
 void plat_sock_set_nonblocking(int sock) {
     u_long mode = 1;
     ioctlsocket((SOCKET)sock, FIONBIO, &mode);
+}
+
+int plat_poll_read(int sock, int timeout_ms) {
+    WSAPOLLFD pfd;
+    pfd.fd = (SOCKET)sock;
+    pfd.events = POLLRDNORM;
+    pfd.revents = 0;
+    int r = WSAPoll(&pfd, 1, timeout_ms);
+    return r == SOCKET_ERROR ? -1 : r;
 }
 
 void plat_sleep_ms(int ms) {
@@ -234,6 +244,13 @@ void plat_sock_close(int sock) {
 void plat_sock_set_nonblocking(int sock) {
     int flags = fcntl(sock, F_GETFL, 0);
     fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+}
+
+int plat_poll_read(int sock, int timeout_ms) {
+    struct pollfd pfd = {.fd = sock, .events = POLLIN, .revents = 0};
+    int r = poll(&pfd, 1, timeout_ms);
+    if (r < 0 && errno == EINTR) return 0;
+    return r;
 }
 
 void plat_sleep_ms(int ms) {

@@ -1,0 +1,170 @@
+# Dragon GL - Copyright (C) 2026 Nicola Taibi
+# License: GPL-3.0-or-later
+#
+# Server integration tests (standalone CMake project).
+#
+#   cmake -B build-integration tests/integration -DCMAKE_BUILD_TYPE=Debug \
+#         -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+#   cmake --build build-integration --parallel
+#   ctest --test-dir build-integration --output-on-failure
+#
+# Two kinds of tests are registered:
+#   * network tests (test_server.py): a real dragongl_server process is
+#     started on a free port and driven by a protocol client (dglproto.py);
+#   * in-process tests (server_harness): the server translation units are
+#     linked without main() and exercised directly (persistence, trade).
+#
+# Tests that reproduce a known, still open defect are marked WILL_FAIL /
+# expectedFailure with the issue id of the review (P0-x, P1-x). Fixing the
+# defect turns them into an "unexpected success": remove the marker in the
+# same commit as the fix.
+cmake_minimum_required(VERSION 3.16)
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/DragonGL.cmake")
+project(DragonGLIntegration VERSION ${DRAGONGL_VERSION} LANGUAGES C)
+
+dragongl_compile_settings()
+set(DGL_ROOT "${DRAGONGL_ROOT}")
+dragongl_generate_config("${CMAKE_CURRENT_BINARY_DIR}/generated")
+
+find_package(Threads REQUIRED)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
+find_package(OpenSSL 3.0 REQUIRED)
+
+set(DGL_SERVER_SRCS ${DRAGONGL_SERVER_SRCS} ${DRAGONGL_SHARED_SRCS})
+set(DGL_INCLUDES ${DGL_ROOT}/include ${DGL_ROOT}/src/server ${DGL_ROOT}/src/client
+    "${CMAKE_CURRENT_BINARY_DIR}/generated")
+
+# --- The real server, built with the flags of this project (sanitizers) ---
+add_executable(dragongl_server_it ${DGL_SERVER_SRCS})
+target_include_directories(dragongl_server_it PRIVATE ${DGL_INCLUDES})
+target_link_libraries(dragongl_server_it PRIVATE Threads::Threads m PkgConfig::SODIUM OpenSSL::SSL OpenSSL::Crypto ${DRAGONGL_CJSON_LIBS})
+
+# --- In-process harness: every server module but main_server.c ---
+add_executable(server_harness server_harness.c harness_spells.c harness_commands.c fixture.c
+    harness_util.c harness_combat.c harness_world.c harness_items.c
+    harness_rounds.c harness_magic.c harness_spec.c harness_worldgen.c harness_interact.c
+    harness_magicitems.c harness_monsters.c harness_classes.c
+    ${DRAGONGL_SERVER_LIB_SRCS} ${DRAGONGL_SHARED_SRCS})
+target_include_directories(server_harness PRIVATE ${DGL_INCLUDES})
+# DRAGONGL_FAULT_INJECTION: the crash points of binfile_write_atomic().
+target_compile_definitions(server_harness PRIVATE DGL_TEST_DATA_DIR="${DGL_ROOT}/data"
+    DRAGONGL_FAULT_INJECTION)
+target_link_libraries(server_harness PRIVATE Threads::Threads m PkgConfig::SODIUM OpenSSL::SSL OpenSSL::Crypto ${DRAGONGL_CJSON_LIBS})
+
+# Benchmark of the round (tools/quality.sh bench): not a CTest entry, its
+# numbers mean something in a Release build on a quiet machine only.
+add_executable(tick_bench tick_bench.c fixture.c
+    ${DRAGONGL_SERVER_LIB_SRCS} ${DRAGONGL_SHARED_SRCS})
+target_include_directories(tick_bench PRIVATE ${DGL_INCLUDES})
+target_compile_definitions(tick_bench PRIVATE DGL_TEST_DATA_DIR="${DGL_ROOT}/data")
+target_link_libraries(tick_bench PRIVATE Threads::Threads m PkgConfig::SODIUM OpenSSL::SSL OpenSSL::Crypto ${DRAGONGL_CJSON_LIBS})
+
+# The campaign (tools/quality.sh campaign): a bot of every class plays the
+# whole dungeon; minutes to hours, not a CTest entry.
+add_executable(campaign_sim campaign_sim.c fixture.c
+    ${DRAGONGL_SERVER_LIB_SRCS} ${DRAGONGL_SHARED_SRCS})
+target_include_directories(campaign_sim PRIVATE ${DGL_INCLUDES})
+target_compile_definitions(campaign_sim PRIVATE DGL_TEST_DATA_DIR="${DGL_ROOT}/data")
+target_link_libraries(campaign_sim PRIVATE Threads::Threads m PkgConfig::SODIUM OpenSSL::SSL OpenSSL::Crypto ${DRAGONGL_CJSON_LIBS})
+
+enable_testing()
+
+# The harness writes saves/ into its working directory: give it its own.
+set(DGL_WORK "${CMAKE_CURRENT_BINARY_DIR}/work")
+file(MAKE_DIRECTORY "${DGL_WORK}")
+
+add_test(NAME persistence_full_backpack_roundtrip
+         COMMAND server_harness full_backpack_roundtrip
+         WORKING_DIRECTORY "${DGL_WORK}")
+add_test(NAME persistence_partial_backpack_roundtrip
+         COMMAND server_harness partial_backpack_roundtrip
+         WORKING_DIRECTORY "${DGL_WORK}")
+foreach(t trade_offer_revalidated_on_accept trade_moves_item_and_gold
+          trade_into_full_backpack_is_cancelled world_roundtrip npc_pools_reclaim npcs_roundtrip
+          tombstone_and_flags_roundtrip writer_queue crash_during_save
+          login_job_outcomes
+          login_worker_async command_table command_words command_docs private_files doors
+          transit_cantrips_need_a_book
+          floor_walk_matches_scan entity_lookup player_move
+          spell_attack spell_save_area spell_cone_and_line spell_conditions spell_self
+          spell_cloud spell_special_and_terrain spell_refusals spell_every_effect
+          shop_no_arbitrage ammunition_bundles shop_reactive_prices shop_needs_a_merchant wear_cursed_stays merchant_restocks
+          boss_floor_is_playable dm_spawn_and_place numeric_arguments
+          tunnel_keeps_the_border floors_without_characters_sleep
+          swarm_splits_into_free_slots full_table_spares_the_boss swarm_clones_stop_at_the_floor_cap
+          swarm_spares_the_dead_in_a_full_table autosave_in_steps metrics_and_telemetry)
+    add_test(NAME ${t} COMMAND server_harness ${t} WORKING_DIRECTORY "${DGL_WORK}")
+endforeach()
+# Combat, loot, death and tombstones (harness_combat.c).
+foreach(t melee_attack weapons_and_arrows monster_attacks loot party_shares_xp
+          boss_and_event_kills death_and_tombstone conquest_of_the_dungeon leaving_the_game in_a_fight ghost_is_not_a_boss tombstone_expires
+          tombstone_takes_the_backpack tombstones_load_in_order
+          combat_log)
+    add_test(NAME ${t} COMMAND server_harness ${t} WORKING_DIRECTORY "${DGL_WORK}")
+endforeach()
+# Traps, search, look, town services, mining, steps (harness_world.c).
+foreach(t every_trap search_and_disarm look_and_examine town_services mining steps ground_journal)
+    add_test(NAME ${t} COMMAND server_harness ${t} WORKING_DIRECTORY "${DGL_WORK}")
+endforeach()
+# Items, merchants' services, character, social (harness_items.c).
+foreach(t use_items books_and_lore equipment level_up_and_train merchant_services social)
+    add_test(NAME ${t} COMMAND server_harness ${t} WORKING_DIRECTORY "${DGL_WORK}")
+endforeach()
+# Rounds of the world, monsters' minds, DM reports, gear (harness_rounds.c).
+foreach(t player_rounds global_event world_respawns monster_minds dm_reports starting_gear)
+    add_test(NAME ${t} COMMAND server_harness ${t} WORKING_DIRECTORY "${DGL_WORK}")
+endforeach()
+# Spells of exploration and support, allies, invisibility (harness_magic.c).
+foreach(t magic_exploration magic_care magic_allies magic_invisibility magic_upcast)
+    add_test(NAME ${t} COMMAND server_harness ${t} WORKING_DIRECTORY "${DGL_WORK}")
+endforeach()
+# Every command against docs/COMMANDS.md (harness_spec.c).
+foreach(t spec_aliases_and_directions spec_secret_passages spec_disarm_next_to_you spec_throw
+          spec_status_sheet spec_armour_and_dex spec_cast_target spec_study_word spec_lore_and_fill
+          spec_scrolls_and_wands spec_merchant_next_to_you spec_trade spec_retrieve
+          spec_dm_commands)
+    add_test(NAME ${t} COMMAND server_harness ${t} WORKING_DIRECTORY "${DGL_WORK}")
+endforeach()
+# The creatures of a new world, how they walk (harness_worldgen.c).
+foreach(t world_generation monsters_walk_every_biome floors_traversable dm_spawn_full_stats)
+    add_test(NAME ${t} COMMAND server_harness ${t} WORKING_DIRECTORY "${DGL_WORK}")
+endforeach()
+# Characters against monsters and with items (harness_interact.c).
+foreach(t interact_conditions interact_charm interact_reach interact_ranged
+          interact_ability_and_quality interact_worn_bonuses interact_artifacts
+          interact_loot_full_backpack interact_ghosts interact_ghost_cap_and_respawn
+          interact_light)
+    add_test(NAME ${t} COMMAND server_harness ${t} WORKING_DIRECTORY "${DGL_WORK}")
+endforeach()
+# Magic items do what their description says (harness_magicitems.c).
+foreach(t magic_items_kinds magic_items_abilities magic_items_defence magic_items_resistance
+          magic_items_potions magic_items_charges magic_items_world magic_items_weapons magic_items_hud
+          monster_defences monster_blows monster_magic spell_weapon_riders boss_hit_points
+          monsters_are_their_entry
+          class_hit_dice class_saves
+    class_spell_slots)
+    add_test(NAME ${t} COMMAND server_harness ${t} WORKING_DIRECTORY "${DGL_WORK}")
+endforeach()
+# A whole world of 100 floors: slow under the sanitizers.
+set_tests_properties(world_generation PROPERTIES TIMEOUT 900)
+
+# The Python codec of the protocol table against the generated vectors.
+add_test(NAME protocol_vectors
+         COMMAND ${Python3_EXECUTABLE} -m unittest -v test_protocol_vectors
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+set_tests_properties(protocol_vectors PROPERTIES ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+# tools/analyze_log.py on hand-written logs.
+add_test(NAME analyze_log
+         COMMAND ${Python3_EXECUTABLE} -m unittest -v test_analyze_log
+         WORKING_DIRECTORY "${DGL_ROOT}/tools")
+set_tests_properties(analyze_log PROPERTIES ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+add_test(NAME server_network
+         COMMAND ${Python3_EXECUTABLE} -m unittest -v test_server
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+set_tests_properties(server_network PROPERTIES
+    ENVIRONMENT "DRAGONGL_SERVER=$<TARGET_FILE:dragongl_server_it>;DRAGONGL_DATA=${DGL_ROOT}/data;ASAN_OPTIONS=detect_leaks=0;PYTHONDONTWRITEBYTECODE=1"
+    TIMEOUT 900)

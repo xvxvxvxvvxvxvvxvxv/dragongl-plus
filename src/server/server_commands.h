@@ -25,12 +25,20 @@
 #define SERVER_COMMANDS_H
 
 #include "server_entities.h"
+#include <stdio.h>
 
 /**
  * handle_text_cmd - Process a text command (look, buy, cast, dm_*, etc.)
  * @c: The client sending the command.
  * @cmd: The text command.
  * @npcs: The array of all NPCs on the server.*/
-void handle_text_cmd(Client *c, const char *cmd, NPC *npcs);
+void handle_text_cmd(Client *c, const char *cmd, Game *game);
+
+/* The reference of the commands as Markdown: docs/COMMANDS.md
+ * (dragongl_server --print-commands). */
+void cmd_help_markdown(FILE *out);
+
+/* Reap finished DM PDF generators and notify the DM (main loop). */
+void pdf_jobs_poll(Game *game);
 
 #endif // SERVER_COMMANDS_H

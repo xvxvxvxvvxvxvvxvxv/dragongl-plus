@@ -23,27 +23,17 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/* Listening TCP socket on every local address (IPv6 dual-stack, or IPv4
+ * where IPv6 is unavailable); -1 on error. */
 int net_create_server(int port);
-/*loopback_only: bind 127.0.0.1 (solo games), else every interface.*/
-int net_create_server_ex(int port, bool loopback_only);
-int net_connect_to_server(const char *ip, int port);
+/* Connect to host (name, IPv4 or IPv6 address) within timeout_ms per
+ * address tried. The socket is non-blocking, close-on-exec, with TCP
+ * keepalive. Returns -1 with a reason in why on failure. */
+int net_connect_to_server(const char *host, int port, int timeout_ms, char *why, size_t why_len);
 void net_set_nonblocking(int sock);
+/* Send all len bytes; false if the peer is gone (or stays full ~2 s). */
 bool net_send(int sock, const void *data, int len);
-int net_receive(int sock, void *buffer, int max_len);
-int net_receive_all(int sock, void *buffer, int len);
-/*Read EXACTLY len bytes (no partial reads): blocks with short pauses until
- * len bytes arrive, the peer closes the connection (returns -1) or the
- * retry budget is exhausted (returns -1). Use it for protocol headers so a
- * short recv() can never be mistaken for a complete header.*/
-int net_receive_exact(int sock, void *buffer, int len);
 void net_close(int sock);
-/*1 = readable, 0 = timeout, -1 = error.*/
-int net_wait_readable(int sock, int timeout_ms);
-/*true if the peer closed the connection (no data consumed).*/
-bool net_peek_closed(int sock);
-/*Connect with a timeout (host name or IPv4); returns a NON-BLOCKING
- * socket or -1 with a human-readable reason in err.*/
-int net_connect_timeout(const char *host, int port, int timeout_ms, char *err, size_t err_len);
 
 /*Safe string copy that ALWAYS NUL-terminates: copies at most cap-1 chars
  * from src (empty string if cap < 1) and sets dst[cap-1] = 0.
