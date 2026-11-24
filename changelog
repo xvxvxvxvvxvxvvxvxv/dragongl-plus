@@ -1,3 +1,10 @@
+* Tue Nov 24 2026 DragonGL+ - 2026.11.24.01
+- SHOPS: "identify <name>" with a name that matched no unknown item
+  identified (and charged 100gp for) the last unknown item in the
+  backpack; it now asks for the backpack number. "identify <n>" on an
+  item already identified says so.
+- ITEMS: "get <n>" with a number past the objects on the tile picked up
+  the first one; it now says there is no such object.
 * Sun Nov 22 2026 DragonGL+ - 2026.11.22.01
 - COMBAT: thrown items fly past merchants instead of hitting them (a
   throw could kill a town merchant and award XP).
