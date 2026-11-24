@@ -58,6 +58,10 @@ long client_tls_recv(ClientTls *t, void *buf, size_t cap, char *why, size_t why_
 /* Decrypted bytes waiting inside TLS (poll() would not report them). */
 bool client_tls_pending(ClientTls *t);
 
+/* DragonGL+: true if the server negotiated the DragonGL+ extension of the
+ * protocol (more messages: inventory, shop, spellbook, events). */
+bool client_tls_is_plus(const ClientTls *t);
+
 /* close_notify and free; the caller closes the socket. */
 void client_tls_close(ClientTls *t);
 

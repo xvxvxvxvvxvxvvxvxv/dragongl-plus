@@ -34,16 +34,16 @@ typedef struct {
     int port;
     char server_pass[64];
     char user[32];
-    char pass[32];
+    char pass[64];
     bool is_new;
     int race_id, subrace_id, class_id, alignment;
     char sex; /*'M' or 'F' (cosmetic)*/
     /*Keep retrying the connection for this long (ms): the solo server
      * may still be generating its world when the client first tries.*/
     int retry_ms;
-    /*Never fall back to the classic (original Dragon GL) protocol: set
-     * for the bundled solo server, which always speaks the current one.*/
-    bool no_classic;
+    /*SHA-256 fingerprint the server certificate must have (solo: the
+     * certificate of the bundled server); "" = trust on first use.*/
+    char fingerprint[112];
 } LoginInfo;
 
 bool session_start(const LoginInfo *info);

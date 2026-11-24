@@ -300,3 +300,20 @@ void client_tls_close(ClientTls *t) {
     pthread_mutex_unlock(&t->lock);
     free_session(t);
 }
+
+/* DragonGL+: the server chose the extension protocol in the handshake
+ * (TLS_ALPN_PLUS, tls_common.h); false for a Dragon GL server. */
+bool client_tls_is_plus(const ClientTls *t) {
+    const unsigned char *sel = NULL;
+    unsigned int len = 0;
+    if (!t || !t->ssl) {
+        return false;
+    }
+    SSL_get0_alpn_selected(t->ssl, &sel, &len);
+#ifdef TLS_ALPN_PLUS_NAME
+    return sel && len == sizeof(TLS_ALPN_PLUS_NAME) - 1 &&
+           memcmp(sel, TLS_ALPN_PLUS_NAME, len) == 0;
+#else
+    return false;
+#endif
+}

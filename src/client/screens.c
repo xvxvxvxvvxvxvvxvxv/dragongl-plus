@@ -382,8 +382,8 @@ static void draw_join(void) {
         cy += 58;
     }
     ui_text_wrap(FONT_BODY, 14, lx, cy, w - 60,
-                 "^9Hosting: run ^8dragongl_server --password <pwd>^9 on the host computer and share its address. "
-                 "The default port is 8080. Passwords travel unencrypted: do not reuse important ones.", COL_TEXT_FAINT, 18);
+                 "^9Hosting: run ^8dragongl_server --password-file <file>^9 on the host computer and share its address "
+                 "(default port 8080). The connection is encrypted; the first time, the server's fingerprint is remembered.", COL_TEXT_FAINT, 18);
     cy += 60;
     error_box(lx, cy, w - 60);
     LoginInfo li;

@@ -185,6 +185,11 @@ if(DRAGONGL_BUILD_CLIENT)
         src/client/net_thread.c
         src/client/client_state.c
         src/client/client_tome.c
+        src/client/client_tls.c
+        src/client/known_servers.c
+        src/shared/map.c
+        src/shared/map_city.c
+        src/shared/map_traps.c
         third_party/volk/volk.c
         third_party/miniaudio/miniaudio.c
     )
