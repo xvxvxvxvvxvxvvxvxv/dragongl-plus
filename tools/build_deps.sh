@@ -80,5 +80,10 @@ echo "build_deps: libsodium $SODIUM_VERSION ($TARGET)"
     make -j"$JOBS" >/dev/null &&
     make install >/dev/null)
 
+# their licences ship in the packages (tools/package.sh)
+mkdir -p "$PREFIX/licenses"
+cp "$WORK/openssl/LICENSE.txt" "$PREFIX/licenses/OpenSSL-Apache-2.0.txt"
+cp "$WORK/sodium/LICENSE" "$PREFIX/licenses/libsodium-ISC.txt"
+
 echo "$STAMP" >"$PREFIX/.deps-stamp"
 echo "build_deps: installed in $PREFIX"
