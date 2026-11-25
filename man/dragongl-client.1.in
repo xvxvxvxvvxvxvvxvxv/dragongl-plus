@@ -1,75 +1,48 @@
-.\" Dragon GL - Copyright (C) 2026 Nicola Taibi
-.\" SPDX-License-Identifier: GPL-3.0-or-later
-.TH DRAGONGL-CLIENT 1 "@DRAGONGL_RELEASE_DATE@" "Dragon GL @DRAGONGL_VERSION@" "User Commands"
+.TH DRAGONGL-CLIENT 1 "2026-11-25" "DragonGL+ 2026.11" "User Commands"
 .SH NAME
 dragongl-client \- Dragon GL client launcher script
 .SH SYNOPSIS
 .B dragongl-client
-[\fIoptions\fR] [\fIserver_host\fR [\fIport\fR]]
-.br
-.B dragongl-client
-.BR \-h " | " \-\-help
+.RI "[\-\-help\ |\ -h ]"
+.RI "[ gl | vk ]"
+.RI "[ server_ip ]"
+.RI "[ port ]"
 .SH DESCRIPTION
 .B dragongl-client
-starts
-.BR dragongl_client (1):
-the one installed next to the script (RPM:
-.IR /usr/bin ),
-or
-.I build/dragongl_client
-in a development tree. The arguments are passed on unchanged; the working
-directory does not matter (the client finds its shaders next to the
-executable or in
-.IR /usr/share/dragongl/shaders ).
+is a convenience launcher for the Dragon GL client. It runs
+.B build/dragongl_client
+when started from a source tree, otherwise the installed
+.BR dragongl_client ,
+passing every argument unchanged. With no argument the game opens on its
+title menu (Play Solo / Join a Server).
 .SH ARGUMENTS
 .TP
-.I server_host
-(optional) Host name, IPv4 or IPv6 address of the server; skips the
-interactive prompt (handy over SSH).
+.B gl
+OpenGL 3.3 renderer (default).
+.TP
+.B vk
+Vulkan 1.3 renderer (falls back to OpenGL if unavailable).
+.TP
+.I server_ip
+(optional) Pre-fill the "Join a Server" form.
 .TP
 .I port
 (optional) Server TCP port (default 8080).
 .SH OPTIONS
 .TP
-.BI \-\-fingerprint " sha256"
-Trust only the server certificate with this SHA-256 fingerprint (see
-.BR dragongl_client (1)).
-.TP
-.BI \-\-ui\-scale " n"
-Size of the HUD, 0.5 to 4.
-.TP
-.B \-\-print\-config
-Write the settings file with every default to standard output and exit
-(the banner is not printed).
-.TP
-.BI \-\-frames " n"
-Draw
-.I n
-frames, print the frame times and exit.
-.TP
-.BR \-h ", " \-\-help
+.B \-h , \-\-help
 Show a short help message and exit.
-.SH ENVIRONMENT
-See
-.BR dragongl_client (1):
-.BR DRAGONGL_WINDOW ,
-.BR DRAGONGL_GPU ,
-.BR DRAGONGL_VSYNC ,
-.BR DRAGONGL_SHADER_DIR ,
-.BR VK_INSTANCE_LAYERS .
 .SH EXAMPLES
-Start the client and answer the prompts:
+Start the client with the Vulkan backend:
 .PP
 .RS
-.B dragongl-client
+.B dragongl-client vk
 .RE
 .PP
-Connect directly to a remote server:
+Connect directly to a remote server (skips the IP prompt):
 .PP
 .RS
-.B dragongl-client 192.168.1.10 9000
-.br
-.B dragongl-client 2001:db8::10
+.B dragongl-client vk 192.168.1.10 9000
 .RE
 .SH SEE ALSO
 .BR dragongl_client (1),

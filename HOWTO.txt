@@ -22,7 +22,8 @@
 
 # --- Play with friends ----------------------------------------------------
 # On the host:
-./dragongl-server --password "anypassword"
+echo "a-long-password" > server-password.txt   # 8-63 characters
+./dragongl-server --password-file server-password.txt
 # On every player's computer: start the client, choose "Join a Server",
 # enter the host's address, port 8080 and the server password.
 ./dragongl-client 192.168.1.10 8080     # pre-fills the Join form

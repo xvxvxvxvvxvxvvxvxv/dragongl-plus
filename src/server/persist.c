@@ -52,7 +52,8 @@ static bool make_dirs(const char *path, char *err, size_t err_len) {
         if (*p == '/' || *p == '\0') {
             char saved = *p;
             *p = '\0';
-            if (mkdir(buf, 0700) != 0 && errno != EEXIST) {
+            bool drive_root = strlen(buf) == 2 && buf[1] == ':'; /* DragonGL+: "C:" */
+            if (!drive_root && mkdir(buf, 0700) != 0 && errno != EEXIST) {
                 snprintf(err, err_len, "cannot create %s: %s", buf, strerror(errno));
                 return false;
             }
@@ -88,6 +89,11 @@ bool persist_init_state_dir(const char *explicit_dir, char *err, size_t err_len)
         n = snprintf(dir, sizeof(dir), "%s/dragongl", xdg);
     } else if (home && home[0] == '/') {
         n = snprintf(dir, sizeof(dir), "%s/.local/state/dragongl", home);
+#ifdef _WIN32
+    } else if (getenv("LOCALAPPDATA") && getenv("LOCALAPPDATA")[0]) {
+        /* DragonGL+: the per-user application data of Windows */
+        n = snprintf(dir, sizeof(dir), "%s/DragonGL/server", getenv("LOCALAPPDATA"));
+#endif
     } else {
         snprintf(err, err_len, "no state directory: use --state-dir or set DRAGONGL_STATE_DIR");
         return false;
@@ -96,6 +102,13 @@ bool persist_init_state_dir(const char *explicit_dir, char *err, size_t err_len)
         snprintf(err, err_len, "state directory path too long");
         return false;
     }
+#ifdef _WIN32
+    for (char *p = dir; *p; p++) { /* DragonGL+: one separator, '/' */
+        if (*p == '\\') {
+            *p = '/';
+        }
+    }
+#endif
     /* Drop trailing slashes so the joined paths stay clean. */
     while (n > 1 && dir[n - 1] == '/') {
         dir[--n] = '\0';

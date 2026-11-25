@@ -1,8 +1,9 @@
 name: Build
 
-# Every push / pull request builds the portable Linux and Windows packages
-# and uploads them as workflow artifacts. Pushing a tag "v*" also publishes
-# them on a GitHub Release.
+# Every push / pull request builds and tests the game, builds the portable
+# Linux and Windows packages (uploaded as workflow artifacts) and starts
+# the Windows server on a Windows runner. Pushing a tag "v*" also
+# publishes the packages on a GitHub Release.
 
 on:
   push:
@@ -12,9 +13,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Fast developer build: system compiler + AddressSanitizer/UBSan, then a
-  # smoke test of the server (start, accept a TCP connection, clean stop).
-  dev-asan:
+  # Developer build with AddressSanitizer/UBSan, Dragon GL's unit and
+  # integration tests (server, protocol, rules, world) and the DragonGL+
+  # protocol extension, plus a smoke test of the server.
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,26 +24,37 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang cmake ninja-build \
+            libssl-dev libsodium-dev python3 \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev
-      - name: Configure (Debug + ASan/UBSan)
+      - name: Build (Debug + ASan/UBSan)
         run: |
           cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
-      - name: Build
-        run: cmake --build build-asan
-      - name: Server smoke test
+          cmake --build build-asan
+      - name: Unit tests
+        run: |
+          cmake -B build-tests -G Ninja tests
+          cmake --build build-tests
+          ctest --test-dir build-tests --output-on-failure
+      - name: Integration tests
+        run: |
+          cmake -B build-integration -G Ninja tests/integration
+          cmake --build build-integration
+          ctest --test-dir build-integration --output-on-failure -j4
+      - name: Server smoke test (Play Solo options)
         run: |
           STATE=$(mktemp -d)
+          printf 'ci-server-secret\n' > "$STATE/pw"
           export ASAN_OPTIONS=detect_leaks=0
-          ./build-asan/dragongl_server --local -P 18080 -p ci -D data -S "$STATE" \
-            --stop-file "$STATE/stop" > server.log 2>&1 &
+          ./build-asan/dragongl_server --local -P 18080 --password-file "$STATE/pw" \
+            -D data -S "$STATE/world" --stop-file "$STATE/stop" > server.log 2>&1 &
           PID=$!
-          for i in $(seq 1 60); do
-            if (exec 3<>/dev/tcp/127.0.0.1/18080) 2>/dev/null; then echo "server is up"; break; fi
+          for i in $(seq 1 120); do
+            grep -q 'Server ready!' server.log && break
             sleep 1
           done
-          (exec 3<>/dev/tcp/127.0.0.1/18080) || { cat server.log; exit 1; }
+          grep -q 'Server ready!' server.log || { cat server.log; exit 1; }
           touch "$STATE/stop"
           wait $PID || { cat server.log; exit 1; }
           tail -n 5 server.log
@@ -50,6 +63,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Static OpenSSL and libsodium, built once per version (tools/build_deps.sh)
+      - uses: actions/cache@v4
+        with:
+          path: build-linux/deps
+          key: deps-linux-${{ hashFiles('tools/build_deps.sh') }}
       # Built inside an Ubuntu 18.04 container (glibc 2.27): the binaries
       # run on practically every desktop distribution of the last years.
       - name: Build portable Linux package
@@ -68,6 +86,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 \
             binutils-mingw-w64-x86-64 cmake ninja-build zip
+      - uses: actions/cache@v4
+        with:
+          path: build-windows/deps
+          key: deps-windows-${{ hashFiles('tools/build_deps.sh') }}
       - name: Build portable Windows package
         run: tools/build_release.sh windows
       - uses: actions/upload-artifact@v4
@@ -75,9 +97,43 @@ jobs:
           name: DragonGL-Plus-windows-x64
           path: dist/*.zip
 
+  # The Windows server, on Windows: start with the options of Play Solo,
+  # wait until it is ready, stop it with the stop file.
+  windows-smoke:
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: DragonGL-Plus-windows-x64
+      - name: Start and stop the server
+        shell: pwsh
+        run: |
+          Expand-Archive DragonGL-Plus-windows-x64.zip -DestinationPath .
+          $dir = "DragonGL-Plus-windows-x64"
+          $state = Join-Path $env:RUNNER_TEMP "world"
+          $pw = Join-Path $env:RUNNER_TEMP "pw.txt"
+          $stop = Join-Path $env:RUNNER_TEMP "stop"
+          Set-Content -Path $pw -Value "ci-server-secret"
+          $p = Start-Process -FilePath "$dir\dragongl_server.exe" -PassThru -NoNewWindow `
+            -RedirectStandardOutput server.log -RedirectStandardError server.err `
+            -ArgumentList "--local","-P","18080","--password-file",$pw,"-S",$state,"--stop-file",$stop
+          $ready = $false
+          for ($i = 0; $i -lt 180 -and -not $ready; $i++) {
+            Start-Sleep -Seconds 1
+            if ((Test-Path server.log) -and (Select-String -Path server.log -Pattern "Server ready!" -Quiet)) { $ready = $true }
+            if ($p.HasExited) { break }
+          }
+          Get-Content server.log -Tail 20
+          if (-not $ready) { Get-Content server.err; throw "the server did not start" }
+          New-Item -ItemType File -Path $stop | Out-Null
+          if (-not $p.WaitForExit(60000)) { throw "the server did not stop" }
+          Get-Content server.log -Tail 5
+          if ($p.ExitCode -ne 0) { throw "exit code $($p.ExitCode)" }
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, windows]
+    needs: [test, linux, windows, windows-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: write

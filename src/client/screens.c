@@ -37,7 +37,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define DRAGONGL_VERSION_STR "2026.10"
+#define DRAGONGL_VERSION_STR "2026.11"
 
 extern void hud_help_content(float x, float y, float w, float h, int tab);
 extern int hud_help_tabs(const char ***names);
