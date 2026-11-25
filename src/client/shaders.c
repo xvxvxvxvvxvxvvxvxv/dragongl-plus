@@ -35,7 +35,13 @@
     X("bloom_down.frag", bloom_down_frag, 1) \
     X("bloom_up.frag", bloom_up_frag, 1)     \
     X("composite.frag", composite_frag, 1)   \
-    X("fxaa.frag", fxaa_frag, 1)
+    X("fxaa.frag", fxaa_frag, 1)             \
+    X("shadow.vert", shadow_vert, 1)         \
+    X("shadow_sun.frag", shadow_sun_frag, 1) \
+    X("shadow_cube.frag", shadow_cube_frag, 1) \
+    X("ssao.frag", ssao_frag, 1)             \
+    X("ssao_blur.frag", ssao_blur_frag, 1)   \
+    X("ao_apply.frag", ao_apply_frag, 1)
 
 #define DECL_GLSL(file, sym, spv)                   \
     extern const unsigned char asset_glsl_##sym[]; \
@@ -55,6 +61,12 @@ DECL_SPV(bloom_down_frag)
 DECL_SPV(bloom_up_frag)
 DECL_SPV(composite_frag)
 DECL_SPV(fxaa_frag)
+DECL_SPV(shadow_vert)
+DECL_SPV(shadow_sun_frag)
+DECL_SPV(shadow_cube_frag)
+DECL_SPV(ssao_frag)
+DECL_SPV(ssao_blur_frag)
+DECL_SPV(ao_apply_frag)
 #undef DECL_SPV
 
 #define SPV_0(sym) NULL, 0

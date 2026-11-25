@@ -41,6 +41,7 @@
 
 #include "gfx.h"
 #include "shaders.h"
+#include "mathx.h"
 #include "volk.h"
 #include <GLFW/glfw3.h>
 #include <stdio.h>
@@ -88,7 +89,7 @@ typedef struct {
     Buffer stream;          /*host-visible vertex ring for this frame*/
     VkDeviceSize stream_off;
     Buffer ubo;
-    VkDescriptorSet set_scene, set_ui;
+    VkDescriptorSet set_scene, set_trans, set_ui; /*set_trans also samples the scene depth*/
     Garbage garbage[MAX_GARBAGE];
     int ngarbage;
 } Frame;
@@ -118,7 +119,7 @@ static VkSampleCountFlagBits g_samples = VK_SAMPLE_COUNT_1_BIT;   /*what the sce
 static VkFormat g_depth_fmt;
 static const VkFormat g_hdr_fmt = VK_FORMAT_R16G16B16A16_SFLOAT;
 static bool g_need_recreate;
-static RenderSettings g_rs = {GFX_AA_MSAA, true, 1.0f};
+static RenderSettings g_rs = {GFX_AA_MSAA, true, 1.0f, 2, true};
 
 /*render targets (recreated with the swapchain or the settings)*/
 #define BLOOM_LEVELS 6
@@ -126,13 +127,21 @@ static Image g_hdr_ms, g_hdr, g_depth, g_ldr, g_bloom[BLOOM_LEVELS];
 static int g_nbloom;
 static VkExtent2D g_rext; /*3D image size: swapchain size x render scale*/
 static VkDescriptorSet g_set_down[BLOOM_LEVELS], g_set_up[BLOOM_LEVELS], g_set_comp, g_set_fxaa;
+/*Vulkan-only effects: scene depth for sampling (MSAA resolve or copy),
+ * ambient occlusion (half resolution), sun and torch shadow maps*/
+static Image g_zbuf, g_ao, g_ao_blur, g_sun_map, g_cube, g_cube_depth;
+static VkImageView g_cube_faces[6];
+static Image g_dummy_depth, g_dummy_cube;
+static VkFormat g_shadow_fmt;
+static VkDescriptorSet g_set_ssao, g_set_ssao_blur, g_set_ao_apply;
 
 static VkCommandPool g_pool;
 static VkDescriptorPool g_dpool;
 static VkDescriptorSetLayout g_dsl_scene, g_dsl_ui, g_dsl_post;
-static VkPipelineLayout g_pl_scene, g_pl_ui, g_pl_post;
+static VkPipelineLayout g_pl_scene, g_pl_ui, g_pl_post, g_pl_ssao;
 static VkPipeline g_p_opaque, g_p_trans, g_p_add, g_p_ui, g_p_down, g_p_up, g_p_comp, g_p_fxaa;
-static VkSampler g_samp_mat, g_samp_linear, g_samp_nearest;
+static VkPipeline g_p_shadow_sun, g_p_shadow_cube, g_p_ssao, g_p_ssao_blur, g_p_ao_apply;
+static VkSampler g_samp_mat, g_samp_linear, g_samp_nearest, g_samp_shadow;
 
 static Frame g_frames[FRAMES];
 static uint32_t g_frame;
@@ -221,6 +230,55 @@ static bool image_create(Image *im, int w, int h, int layers, int mips, VkFormat
     im->h = h;
     im->layers = layers;
     im->mips = mips;
+    im->fmt = fmt;
+    return true;
+}
+
+/*Cube map (6 layers): a cube view for sampling and one 2D view per face
+ * to render into.*/
+static bool cube_create(Image *im, VkImageView faces[6], int size, VkFormat fmt, VkImageUsageFlags usage) {
+    memset(im, 0, sizeof(*im));
+    VkImageCreateInfo ii = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = fmt,
+        .extent = {(uint32_t)size, (uint32_t)size, 1},
+        .mipLevels = 1,
+        .arrayLayers = 6,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+    VK_CHECK(vkCreateImage(g_dev, &ii, NULL, &im->img));
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(g_dev, im->img, &req);
+    int mt = find_memory(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (mt < 0) mt = find_memory(req.memoryTypeBits, 0);
+    if (mt < 0) return false;
+    VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = req.size,
+                               .memoryTypeIndex = (uint32_t)mt};
+    VK_CHECK(vkAllocateMemory(g_dev, &ai, NULL, &im->mem));
+    VK_CHECK(vkBindImageMemory(g_dev, im->img, im->mem, 0));
+    VkImageViewCreateInfo vi = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = im->img,
+        .viewType = VK_IMAGE_VIEW_TYPE_CUBE,
+        .format = fmt,
+        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6},
+    };
+    VK_CHECK(vkCreateImageView(g_dev, &vi, NULL, &im->view));
+    for (int f = 0; f < 6 && faces; f++) {
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.subresourceRange.baseArrayLayer = (uint32_t)f;
+        vi.subresourceRange.layerCount = 1;
+        VK_CHECK(vkCreateImageView(g_dev, &vi, NULL, &faces[f]));
+    }
+    im->w = im->h = size;
+    im->layers = 6;
+    im->mips = 1;
     im->fmt = fmt;
     return true;
 }
@@ -405,6 +463,16 @@ static void targets_destroy(void) {
     image_destroy(&g_ldr);
     for (int i = 0; i < BLOOM_LEVELS; i++) image_destroy(&g_bloom[i]);
     g_nbloom = 0;
+    image_destroy(&g_zbuf);
+    image_destroy(&g_ao);
+    image_destroy(&g_ao_blur);
+    image_destroy(&g_sun_map);
+    for (int f = 0; f < 6; f++) {
+        if (g_cube_faces[f]) vkDestroyImageView(g_dev, g_cube_faces[f], NULL);
+        g_cube_faces[f] = VK_NULL_HANDLE;
+    }
+    image_destroy(&g_cube);
+    image_destroy(&g_cube_depth);
 }
 
 static void write_post_set(VkDescriptorSet set, const Image *a, const Image *b) {
@@ -429,13 +497,38 @@ static bool targets_create(void) {
     int w = (int)g_rext.width, h = (int)g_rext.height;
     VkImageUsageFlags sampled = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     if (!image_create(&g_hdr, w, h, 1, 1, g_hdr_fmt, sampled, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT)) return false;
+    /*the scene is drawn in two passes (opaque, then effects): the MSAA
+     * image is kept in between, not transient*/
     if (g_samples != VK_SAMPLE_COUNT_1_BIT &&
-        !image_create(&g_hdr_ms, w, h, 1, 1, g_hdr_fmt, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
-                      g_samples, VK_IMAGE_ASPECT_COLOR_BIT))
+        !image_create(&g_hdr_ms, w, h, 1, 1, g_hdr_fmt, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, g_samples, VK_IMAGE_ASPECT_COLOR_BIT))
         return false;
-    if (!image_create(&g_depth, w, h, 1, 1, g_depth_fmt, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, g_samples,
+    if (!image_create(&g_depth, w, h, 1, 1, g_depth_fmt,
+                      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, g_samples,
                       VK_IMAGE_ASPECT_DEPTH_BIT))
         return false;
+    /*single-sample copy of the opaque depth: soft particles and SSAO*/
+    if (!image_create(&g_zbuf, w, h, 1, 1, g_depth_fmt,
+                      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                      VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_DEPTH_BIT))
+        return false;
+    if (g_rs.ssao) {
+        int aw = (w + 1) / 2, ah = (h + 1) / 2;
+        if (!image_create(&g_ao, aw, ah, 1, 1, VK_FORMAT_R8_UNORM, sampled, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT) ||
+            !image_create(&g_ao_blur, aw, ah, 1, 1, VK_FORMAT_R8_UNORM, sampled, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT))
+            return false;
+        write_post_set(g_set_ssao, &g_zbuf, &g_zbuf);
+        write_post_set(g_set_ssao_blur, &g_ao, &g_zbuf);
+        write_post_set(g_set_ao_apply, &g_ao_blur, &g_ao_blur);
+    }
+    if (g_rs.shadows > 0) {
+        int ss = g_rs.shadows >= 2 ? 2048 : 1024, cs = g_rs.shadows >= 2 ? 512 : 256;
+        VkImageUsageFlags du = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        if (!image_create(&g_sun_map, ss, ss, 1, 1, g_shadow_fmt, du, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_DEPTH_BIT) ||
+            !cube_create(&g_cube, g_cube_faces, cs, VK_FORMAT_R16_SFLOAT, sampled) ||
+            !image_create(&g_cube_depth, cs, cs, 1, 1, g_shadow_fmt, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                          VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_DEPTH_BIT))
+            return false;
+    }
     if (g_rs.aa == GFX_AA_FXAA &&
         !image_create(&g_ldr, (int)g_extent.width, (int)g_extent.height, 1, 1, g_swap_fmt, sampled, VK_SAMPLE_COUNT_1_BIT,
                       VK_IMAGE_ASPECT_COLOR_BIT))
@@ -597,7 +690,7 @@ static VkShaderModule shader(const char *name) {
     return m;
 }
 
-typedef enum { BLEND_NONE, BLEND_ALPHA, BLEND_ADD } BlendMode;
+typedef enum { BLEND_NONE, BLEND_ALPHA, BLEND_ADD, BLEND_MUL } BlendMode;
 
 typedef struct {
     VkPipelineLayout layout;
@@ -605,8 +698,9 @@ typedef struct {
     const VkPipelineVertexInputStateCreateInfo *vin;
     BlendMode blend;
     bool depth_test, depth_write;
-    VkFormat color, depth; /*depth VK_FORMAT_UNDEFINED: no depth attachment*/
+    VkFormat color, depth; /*color / depth VK_FORMAT_UNDEFINED: no such attachment*/
     VkSampleCountFlagBits samples;
+    bool depth_bias;       /*shadow maps: slope-scaled bias against acne*/
 } PipeDesc;
 
 static VkPipeline make_pipeline(const PipeDesc *d) {
@@ -624,7 +718,9 @@ static VkPipeline make_pipeline(const PipeDesc *d) {
                                             .viewportCount = 1, .scissorCount = 1};
     VkPipelineRasterizationStateCreateInfo rs = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
                                                  .polygonMode = VK_POLYGON_MODE_FILL, .cullMode = VK_CULL_MODE_NONE,
-                                                 .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE, .lineWidth = 1.0f};
+                                                 .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE, .lineWidth = 1.0f,
+                                                 .depthBiasEnable = d->depth_bias, .depthBiasConstantFactor = 1.5f,
+                                                 .depthBiasSlopeFactor = 2.0f};
     VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
                                                .rasterizationSamples = d->samples};
     VkPipelineDepthStencilStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
@@ -639,6 +735,14 @@ static VkPipeline make_pipeline(const PipeDesc *d) {
         ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
         ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         ba.alphaBlendOp = VK_BLEND_OP_ADD;
+    } else if (d->blend == BLEND_MUL) {
+        ba.blendEnable = VK_TRUE;
+        ba.srcColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+        ba.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_COLOR;
+        ba.colorBlendOp = VK_BLEND_OP_ADD;
+        ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        ba.alphaBlendOp = VK_BLEND_OP_ADD;
     } else if (d->blend == BLEND_ADD) {
         ba.blendEnable = VK_TRUE;
         ba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -648,13 +752,14 @@ static VkPipeline make_pipeline(const PipeDesc *d) {
         ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
         ba.alphaBlendOp = VK_BLEND_OP_ADD;
     }
+    bool has_color = d->color != VK_FORMAT_UNDEFINED;
     VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-                                              .attachmentCount = 1, .pAttachments = &ba};
+                                              .attachmentCount = has_color ? 1u : 0u, .pAttachments = &ba};
     VkDynamicState dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dy = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
                                            .dynamicStateCount = 2, .pDynamicStates = dyn};
     VkPipelineRenderingCreateInfo ri = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-                                        .colorAttachmentCount = 1, .pColorAttachmentFormats = &d->color,
+                                        .colorAttachmentCount = has_color ? 1u : 0u, .pColorAttachmentFormats = &d->color,
                                         .depthAttachmentFormat = d->depth};
     VkGraphicsPipelineCreateInfo pi = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -684,12 +789,16 @@ out:
 /*Descriptor set and pipeline layouts. Every pipeline has the same 64-byte
  * block of push constants (PUSH_BLOCK in shaders/common.glsl).*/
 static bool layouts_create(void) {
-    VkDescriptorSetLayoutBinding sb[3] = {
+    /*0 uniforms, 1 materials, 2 explored mask, 3 scene depth, 4 sun shadow, 5 torch shadow*/
+    VkDescriptorSetLayoutBinding sb[6] = {
         {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
         {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
+        {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
+        {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
+        {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
     };
-    VkDescriptorSetLayoutCreateInfo dl = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 3,
+    VkDescriptorSetLayoutCreateInfo dl = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 6,
                                           .pBindings = sb};
     VK_CHECK(vkCreateDescriptorSetLayout(g_dev, &dl, NULL, &g_dsl_scene));
     VkDescriptorSetLayoutBinding ub = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL};
@@ -712,11 +821,15 @@ static bool layouts_create(void) {
     VK_CHECK(vkCreatePipelineLayout(g_dev, &li, NULL, &g_pl_ui));
     li.pSetLayouts = &g_dsl_post;
     VK_CHECK(vkCreatePipelineLayout(g_dev, &li, NULL, &g_pl_post));
+    VkPushConstantRange pr_ao = {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 128};
+    li.pPushConstantRanges = &pr_ao;
+    VK_CHECK(vkCreatePipelineLayout(g_dev, &li, NULL, &g_pl_ssao));
     return true;
 }
 
 static void pipelines_destroy(void) {
-    VkPipeline *ps[] = {&g_p_opaque, &g_p_trans, &g_p_add, &g_p_ui, &g_p_down, &g_p_up, &g_p_comp, &g_p_fxaa};
+    VkPipeline *ps[] = {&g_p_opaque, &g_p_trans, &g_p_add, &g_p_ui, &g_p_down, &g_p_up, &g_p_comp, &g_p_fxaa,
+                        &g_p_shadow_sun, &g_p_shadow_cube, &g_p_ssao, &g_p_ssao_blur, &g_p_ao_apply};
     for (size_t i = 0; i < sizeof(ps) / sizeof(ps[0]); i++) {
         if (*ps[i]) vkDestroyPipeline(g_dev, *ps[i], NULL);
         *ps[i] = VK_NULL_HANDLE;
@@ -769,7 +882,26 @@ static bool pipelines_create(void) {
     PipeDesc ui = {g_pl_ui, "ui.vert", "ui.frag", &uvin, BLEND_ALPHA, false, false, g_swap_fmt, VK_FORMAT_UNDEFINED,
                    VK_SAMPLE_COUNT_1_BIT};
     g_p_ui = make_pipeline(&ui);
-    return g_p_opaque && g_p_trans && g_p_add && g_p_down && g_p_up && g_p_comp && g_p_fxaa && g_p_ui;
+    /*Vulkan-only effects*/
+    PipeDesc sh = {g_pl_scene, "shadow.vert", "shadow_sun.frag", &svin, BLEND_NONE, true, true, VK_FORMAT_UNDEFINED,
+                   g_shadow_fmt, VK_SAMPLE_COUNT_1_BIT, true};
+    g_p_shadow_sun = make_pipeline(&sh);
+    sh.fs = "shadow_cube.frag";
+    sh.color = VK_FORMAT_R16_SFLOAT;
+    sh.depth_bias = false;
+    g_p_shadow_cube = make_pipeline(&sh);
+    PipeDesc ao = {g_pl_ssao, "fullscreen.vert", "ssao.frag", NULL, BLEND_NONE, false, false, VK_FORMAT_R8_UNORM,
+                   VK_FORMAT_UNDEFINED, VK_SAMPLE_COUNT_1_BIT, false};
+    g_p_ssao = make_pipeline(&ao);
+    ao.layout = g_pl_post;
+    ao.fs = "ssao_blur.frag";
+    g_p_ssao_blur = make_pipeline(&ao);
+    /*drawn inside the scene's transparent pass: its attachments*/
+    PipeDesc ap = {g_pl_post, "fullscreen.vert", "ao_apply.frag", NULL, BLEND_MUL, false, false, g_hdr_fmt, g_depth_fmt,
+                   g_samples, false};
+    g_p_ao_apply = make_pipeline(&ap);
+    return g_p_opaque && g_p_trans && g_p_add && g_p_down && g_p_up && g_p_comp && g_p_fxaa && g_p_ui &&
+           g_p_shadow_sun && g_p_shadow_cube && g_p_ssao && g_p_ssao_blur && g_p_ao_apply;
 }
 
 /* ------------------------------------------------------------------ */
@@ -904,12 +1036,22 @@ static bool vk_init(GLFWwindow *win, bool vsync) {
     g_samples = g_rs.aa == GFX_AA_MSAA ? g_msaa_max : VK_SAMPLE_COUNT_1_BIT;
     const VkFormat dfs[3] = {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_X8_D24_UNORM_PACK32};
     g_depth_fmt = VK_FORMAT_UNDEFINED;
+    /*the scene depth is also copied and sampled (soft particles, SSAO)*/
+    const VkFormatFeatureFlags dneed = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                       VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
     for (int i = 0; i < 3; i++) {
         VkFormatProperties fp;
         vkGetPhysicalDeviceFormatProperties(g_phys, dfs[i], &fp);
-        if (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) { g_depth_fmt = dfs[i]; break; }
+        if ((fp.optimalTilingFeatures & dneed) == dneed) { g_depth_fmt = dfs[i]; break; }
     }
     if (g_depth_fmt == VK_FORMAT_UNDEFINED) return false;
+    {
+        /*shadow maps: sampled with comparison (D16 is always possible)*/
+        VkFormatProperties fp;
+        vkGetPhysicalDeviceFormatProperties(g_phys, VK_FORMAT_D32_SFLOAT, &fp);
+        VkFormatFeatureFlags need = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+        g_shadow_fmt = (fp.optimalTilingFeatures & need) == need ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_D16_UNORM;
+    }
 
     VkCommandPoolCreateInfo pci = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
                                    .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = g_qfam};
@@ -918,13 +1060,28 @@ static bool vk_init(GLFWwindow *win, bool vsync) {
     if (!create_sampler(&g_samp_mat, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT, 16.0f, true)) return false;
     if (!create_sampler(&g_samp_linear, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, 0.0f, false)) return false;
     if (!create_sampler(&g_samp_nearest, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, 0.0f, false)) return false;
+    {
+        VkSamplerCreateInfo si = {
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .magFilter = VK_FILTER_LINEAR,
+            .minFilter = VK_FILTER_LINEAR,
+            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+            .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .compareEnable = VK_TRUE,
+            .compareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+        };
+        VK_CHECK(vkCreateSampler(g_dev, &si, NULL, &g_samp_shadow));
+    }
     if (!layouts_create()) return false;
 
-    /*per frame: scene + UI sets; shared: one set per post-processing pass*/
-    enum { POST_SETS = BLOOM_LEVELS * 2 + 2 };
-    VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, FRAMES},
-                                  {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FRAMES * 3 + POST_SETS * 2}};
-    VkDescriptorPoolCreateInfo dpi = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = FRAMES * 2 + POST_SETS,
+    /*per frame: scene (opaque, effects) + UI sets; shared: one set per
+     * post-processing pass*/
+    enum { POST_SETS = BLOOM_LEVELS * 2 + 2 + 3 };
+    VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, FRAMES * 2},
+                                  {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FRAMES * 11 + POST_SETS * 2}};
+    VkDescriptorPoolCreateInfo dpi = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = FRAMES * 3 + POST_SETS,
                                       .poolSizeCount = 2, .pPoolSizes = ps};
     VK_CHECK(vkCreateDescriptorPool(g_dev, &dpi, NULL, &g_dpool));
     {
@@ -940,6 +1097,9 @@ static bool vk_init(GLFWwindow *win, bool vsync) {
         }
         g_set_comp = sets[BLOOM_LEVELS * 2];
         g_set_fxaa = sets[BLOOM_LEVELS * 2 + 1];
+        g_set_ssao = sets[BLOOM_LEVELS * 2 + 2];
+        g_set_ssao_blur = sets[BLOOM_LEVELS * 2 + 3];
+        g_set_ao_apply = sets[BLOOM_LEVELS * 2 + 4];
     }
 
     if (!swapchain_create()) {
@@ -961,13 +1121,14 @@ static bool vk_init(GLFWwindow *win, bool vsync) {
         VK_CHECK(vkCreateSemaphore(g_dev, &si, NULL, &f->acquired));
         if (!buffer_create(&f->ubo, sizeof(SceneUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true)) return false;
         if (!buffer_create(&f->stream, 4u << 20, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true)) return false;
-        VkDescriptorSetLayout ls[2] = {g_dsl_scene, g_dsl_ui};
-        VkDescriptorSet sets[2];
+        VkDescriptorSetLayout ls[3] = {g_dsl_scene, g_dsl_scene, g_dsl_ui};
+        VkDescriptorSet sets[3];
         VkDescriptorSetAllocateInfo dai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = g_dpool,
-                                           .descriptorSetCount = 2, .pSetLayouts = ls};
+                                           .descriptorSetCount = 3, .pSetLayouts = ls};
         VK_CHECK(vkAllocateDescriptorSets(g_dev, &dai, sets));
         f->set_scene = sets[0];
-        f->set_ui = sets[1];
+        f->set_trans = sets[1];
+        f->set_ui = sets[2];
     }
 
     /*1x1 placeholder so every descriptor is valid before the first upload*/
@@ -978,6 +1139,18 @@ static bool vk_init(GLFWwindow *win, bool vsync) {
     const uint8_t white[4] = {255, 255, 255, 255};
     Buffer st;
     record_image_upload(cmd, NULL, &g_tex_dummy, white, 4, true, false, &st);
+    /*placeholders for the shadow maps and the scene depth when those
+     * effects are off (never read: the uniforms turn them off)*/
+    if (!image_create(&g_dummy_depth, 1, 1, 1, 1, g_shadow_fmt, VK_IMAGE_USAGE_SAMPLED_BIT, VK_SAMPLE_COUNT_1_BIT,
+                      VK_IMAGE_ASPECT_DEPTH_BIT) ||
+        !cube_create(&g_dummy_cube, NULL, 1, VK_FORMAT_R16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT))
+        return false;
+    barrier_image(cmd, g_dummy_depth.img, VK_IMAGE_ASPECT_DEPTH_BIT, 1, 1, VK_IMAGE_LAYOUT_UNDEFINED,
+                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    barrier_image(cmd, g_dummy_cube.img, VK_IMAGE_ASPECT_COLOR_BIT, 1, 6, VK_IMAGE_LAYOUT_UNDEFINED,
+                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
     one_shot_end(cmd);
     buffer_destroy(&st);
     return true;
@@ -1028,25 +1201,50 @@ static void draw_scene_stream(Frame *f, VkCommandBuffer cmd, VkPipeline p, int p
     vkCmdDraw(cmd, n, 1, 0, 0);
 }
 
-static void update_descriptors(Frame *f) {
+static bool sun_shadows_on(const SceneFrame *s) { return g_sun_map.img && s->u.sun_dir[3] > 0.0f; }
+static bool torch_shadows_on(const SceneFrame *s) {
+    return g_cube.img && s->u.shadow[2] > 0.5f && s->u.misc[0] >= 1.0f && s->u.lights[0].pos[3] > 0.5f;
+}
+
+static void update_descriptors(Frame *f, const SceneFrame *s) {
     VkDescriptorBufferInfo bi = {f->ubo.buf, 0, sizeof(SceneUniforms)};
     VkDescriptorImageInfo mat = {g_samp_mat, g_tex_mat.view ? g_tex_mat.view : VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorImageInfo expl = {g_samp_nearest, g_tex_expl.view ? g_tex_expl.view : g_tex_dummy.view,
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorImageInfo atl = {g_samp_linear, g_tex_atlas.view ? g_tex_atlas.view : g_tex_dummy.view,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet w[4] = {
-        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = f->set_scene, .dstBinding = 0, .descriptorCount = 1,
-         .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .pBufferInfo = &bi},
-        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = f->set_scene, .dstBinding = 1, .descriptorCount = 1,
-         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &mat},
-        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = f->set_scene, .dstBinding = 2, .descriptorCount = 1,
-         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &expl},
-        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = f->set_ui, .dstBinding = 0, .descriptorCount = 1,
-         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &atl},
-    };
-    if (g_tex_mat.view) vkUpdateDescriptorSets(g_dev, 4, w, 0, NULL);
-    else vkUpdateDescriptorSets(g_dev, 1, &w[3], 0, NULL);
+    /*the opaque pass writes the scene depth: it reads the placeholder*/
+    VkDescriptorImageInfo nodepth = {g_samp_nearest, g_dummy_depth.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo depth = {g_samp_nearest, g_zbuf.view ? g_zbuf.view : g_dummy_depth.view,
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo sun = {g_samp_shadow, sun_shadows_on(s) ? g_sun_map.view : g_dummy_depth.view,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo cube = {g_samp_linear, torch_shadows_on(s) ? g_cube.view : g_dummy_cube.view,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    if (!g_tex_mat.view) {
+        VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = f->set_ui, .dstBinding = 0,
+                                  .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                  .pImageInfo = &atl};
+        vkUpdateDescriptorSets(g_dev, 1, &w, 0, NULL);
+        return;
+    }
+    VkWriteDescriptorSet w[13];
+    int n = 0;
+    VkDescriptorSet sets[2] = {f->set_scene, f->set_trans};
+    for (int k = 0; k < 2; k++) {
+        const VkDescriptorImageInfo *imgs[5] = {&mat, &expl, k == 0 ? &nodepth : &depth, &sun, &cube};
+        w[n++] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = sets[k], .dstBinding = 0,
+                                        .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                        .pBufferInfo = &bi};
+        for (int i = 0; i < 5; i++)
+            w[n++] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = sets[k],
+                                            .dstBinding = (uint32_t)(i + 1), .descriptorCount = 1,
+                                            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = imgs[i]};
+    }
+    w[n++] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = f->set_ui, .dstBinding = 0,
+                                    .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                    .pImageInfo = &atl};
+    vkUpdateDescriptorSets(g_dev, (uint32_t)n, w, 0, NULL);
 }
 
 static void capture_swap_image(VkCommandBuffer cmd, VkImage img, Buffer *dst) {
@@ -1106,19 +1304,128 @@ static void post_draw(VkCommandBuffer cmd, VkPipeline p, VkDescriptorSet set, co
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }
 
-/*Scene into the HDR target (through the MSAA image when on).*/
-static void pass_scene(Frame *f, VkCommandBuffer cmd, const SceneFrame *s) {
-    if (g_hdr_ms.img) to_attachment(cmd, &g_hdr_ms);
-    to_attachment(cmd, &g_hdr);
-    VkImageAspectFlags daspect = VK_IMAGE_ASPECT_DEPTH_BIT;
-    if (g_depth_fmt != VK_FORMAT_D32_SFLOAT && g_depth_fmt != VK_FORMAT_X8_D24_UNORM_PACK32) daspect |= VK_IMAGE_ASPECT_STENCIL_BIT;
-    barrier_image(cmd, g_depth.img, daspect, 1, 1, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                  VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                  VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+static VkImageAspectFlags depth_aspect(VkFormat f) {
+    return (f == VK_FORMAT_D24_UNORM_S8_UINT || f == VK_FORMAT_D32_SFLOAT_S8_UINT || f == VK_FORMAT_D16_UNORM_S8_UINT)
+               ? (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)
+               : VK_IMAGE_ASPECT_DEPTH_BIT;
+}
+
+#define STAGE_DEPTH (VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT)
+
+static void depth_to_attachment(VkCommandBuffer cmd, const Image *im, uint32_t layers) {
+    barrier_image(cmd, im->img, depth_aspect(im->fmt), 1, layers, VK_IMAGE_LAYOUT_UNDEFINED,
+                  VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                  STAGE_DEPTH | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, STAGE_DEPTH,
                   VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-    /*the clear colour is the fog colour (sRGB): the target is linear*/
+}
+
+static void depth_to_sampled(VkCommandBuffer cmd, const Image *im, VkImageLayout from, VkPipelineStageFlags stage,
+                             VkAccessFlags access) {
+    barrier_image(cmd, im->img, depth_aspect(im->fmt), 1, 1, from, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, stage, access,
+                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+}
+
+static void begin_depth_only(VkCommandBuffer cmd, const Image *depth, VkImageView color, VkExtent2D ext) {
+    VkRenderingAttachmentInfo ca = {
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .imageView = color,
+        .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .clearValue.color = {{1.0f, 1.0f, 1.0f, 1.0f}},
+    };
+    VkRenderingAttachmentInfo da = {
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .imageView = depth->view,
+        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = color ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE,
+        .clearValue.depthStencil = {1.0f, 0},
+    };
+    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, ext}, .layerCount = 1,
+                          .colorAttachmentCount = color ? 1u : 0u, .pColorAttachments = &ca, .pDepthAttachment = &da};
+    vkCmdBeginRendering(cmd, &ri);
+    VkViewport vp = {0, 0, (float)ext.width, (float)ext.height, 0.0f, 1.0f};
+    VkRect2D sc = {{0, 0}, ext};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+}
+
+/*World chunks whose bounds touch the square (cx, cz) +- r, then the
+ * dynamic geometry (entities). The vertex buffers: world, then stream.*/
+static void draw_casters(Frame *f, VkCommandBuffer cmd, const SceneFrame *s, float cx, float cz, float r,
+                         VkDeviceSize dyn_off, bool have_dyn) {
+    if (g_world_count && g_world.buf) {
+        VkDeviceSize o = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &g_world.buf, &o);
+        for (uint32_t i = 0; i < s->world_nranges; i++) {
+            const GfxRange *rg = &s->world_ranges[i];
+            if (rg->x1 < cx - r || rg->x0 > cx + r || rg->z1 < cz - r || rg->z0 > cz + r) continue;
+            if (rg->first + rg->count > g_world_count) continue;
+            vkCmdDraw(cmd, rg->count, 1, rg->first, 0);
+        }
+    }
+    if (have_dyn) {
+        vkCmdBindVertexBuffers(cmd, 0, 1, &f->stream.buf, &dyn_off);
+        vkCmdDraw(cmd, s->dyn_count, 1, 0, 0);
+    }
+}
+
+static void push_matrix(VkCommandBuffer cmd, const m4 *m) {
+    vkCmdPushConstants(cmd, g_pl_scene, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 64, m->m);
+}
+
+/*Sun (orthographic) and torch (cube of 6 faces) shadow maps.*/
+static void pass_shadows(Frame *f, VkCommandBuffer cmd, const SceneFrame *s) {
+    bool sun = sun_shadows_on(s), torch = torch_shadows_on(s);
+    if (!sun && !torch) return;
+    /*the entities, once, in this frame's stream*/
+    long long dyn = s->dyn_count ? stream_push(f, s->dyn, (size_t)s->dyn_count * sizeof(SVert)) : -1;
+    if (sun) {
+        depth_to_attachment(cmd, &g_sun_map, 1);
+        begin_depth_only(cmd, &g_sun_map, VK_NULL_HANDLE, image_ext(&g_sun_map));
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_p_shadow_sun);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pl_scene, 0, 1, &f->set_scene, 0, NULL);
+        m4 vp;
+        memcpy(vp.m, s->u.sun_vp, sizeof(vp.m));
+        push_matrix(cmd, &vp);
+        draw_casters(f, cmd, s, s->u.player_pos[0], s->u.player_pos[2], 40.0f, dyn < 0 ? 0 : (VkDeviceSize)dyn, dyn >= 0);
+        vkCmdEndRendering(cmd);
+        depth_to_sampled(cmd, &g_sun_map, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, STAGE_DEPTH,
+                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+    }
+    if (torch) {
+        const GfxLight *L = &s->u.lights[0];
+        v3 p = v3m(L->pos[0], L->pos[1], L->pos[2]);
+        float r = L->pos[3];
+        /*face order and up vectors of the cube map convention (+X -X +Y -Y +Z -Z)*/
+        static const float dirs[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+        static const float ups[6][3] = {{0, -1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}, {0, -1, 0}, {0, -1, 0}};
+        m4 proj = m4perspective(1.5707963f, 1.0f, 0.05f, r);
+        barrier_image(cmd, g_cube.img, VK_IMAGE_ASPECT_COLOR_BIT, 1, 6, VK_IMAGE_LAYOUT_UNDEFINED,
+                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, STAGE_RW, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        for (int face = 0; face < 6; face++) {
+            depth_to_attachment(cmd, &g_cube_depth, 1);
+            begin_depth_only(cmd, &g_cube_depth, g_cube_faces[face], image_ext(&g_cube_depth));
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_p_shadow_cube);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pl_scene, 0, 1, &f->set_scene, 0, NULL);
+            v3 d = v3m(dirs[face][0], dirs[face][1], dirs[face][2]);
+            m4 vp = m4mul(proj, m4lookat(p, v3add(p, d), v3m(ups[face][0], ups[face][1], ups[face][2])));
+            push_matrix(cmd, &vp);
+            draw_casters(f, cmd, s, p.x, p.z, r, dyn < 0 ? 0 : (VkDeviceSize)dyn, dyn >= 0);
+            vkCmdEndRendering(cmd);
+        }
+        barrier_image(cmd, g_cube.img, VK_IMAGE_ASPECT_COLOR_BIT, 1, 6, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    }
+}
+
+static void begin_scene(VkCommandBuffer cmd, bool first, bool resolve, const SceneFrame *s) {
     VkClearValue cv = {0};
+    /*the clear colour is the fog colour (sRGB): the target is linear*/
     for (int i = 0; i < 3; i++) {
         float c = s->clear_color[i];
         cv.color.float32[i] = c * (c * (c * 0.305306011f + 0.682171111f) + 0.012522878f);
@@ -1129,19 +1436,24 @@ static void pass_scene(Frame *f, VkCommandBuffer cmd, const SceneFrame *s) {
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
         .imageView = ms ? g_hdr_ms.view : g_hdr.view,
         .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        .resolveMode = ms ? VK_RESOLVE_MODE_AVERAGE_BIT : VK_RESOLVE_MODE_NONE,
-        .resolveImageView = ms ? g_hdr.view : VK_NULL_HANDLE,
+        .resolveMode = ms && resolve ? VK_RESOLVE_MODE_AVERAGE_BIT : VK_RESOLVE_MODE_NONE,
+        .resolveImageView = ms && resolve ? g_hdr.view : VK_NULL_HANDLE,
         .resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = ms ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE,
+        .loadOp = first ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD,
+        .storeOp = ms && resolve ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE,
         .clearValue = cv,
     };
+    /*first pass: with MSAA the depth is resolved (sample 0) into the
+     * single-sample copy that the effects read*/
     VkRenderingAttachmentInfo da = {
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
         .imageView = g_depth.view,
-        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .resolveMode = ms && first ? VK_RESOLVE_MODE_SAMPLE_ZERO_BIT : VK_RESOLVE_MODE_NONE,
+        .resolveImageView = ms && first ? g_zbuf.view : VK_NULL_HANDLE,
+        .resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .loadOp = first ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD,
+        .storeOp = first ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE,
         .clearValue.depthStencil = {1.0f, 0},
     };
     VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, g_rext}, .layerCount = 1,
@@ -1151,6 +1463,19 @@ static void pass_scene(Frame *f, VkCommandBuffer cmd, const SceneFrame *s) {
     VkRect2D sc = {{0, 0}, g_rext};
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &sc);
+}
+
+/*Opaque world and entities; leaves the scene depth sampled in g_zbuf.*/
+static void pass_opaque(Frame *f, VkCommandBuffer cmd, const SceneFrame *s) {
+    bool ms = g_hdr_ms.img != VK_NULL_HANDLE;
+    to_attachment(cmd, ms ? &g_hdr_ms : &g_hdr);
+    depth_to_attachment(cmd, &g_depth, 1);
+    if (ms) /*depth resolves are done in the colour attachment output stage*/
+        barrier_image(cmd, g_zbuf.img, depth_aspect(g_zbuf.fmt), 1, 1, VK_IMAGE_LAYOUT_UNDEFINED,
+                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                      VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    begin_scene(cmd, true, false, s);
     if (g_tex_mat.view) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pl_scene, 0, 1, &f->set_scene, 0, NULL);
         if (g_world_count && g_world.buf) {
@@ -1162,6 +1487,87 @@ static void pass_scene(Frame *f, VkCommandBuffer cmd, const SceneFrame *s) {
             vkCmdDraw(cmd, g_world_count, 1, 0, 0);
         }
         draw_scene_stream(f, cmd, g_p_opaque, 0, s->dyn, s->dyn_count);
+    }
+    vkCmdEndRendering(cmd);
+    VkImageAspectFlags da = depth_aspect(g_depth_fmt);
+    if (ms) {
+        depth_to_sampled(cmd, &g_zbuf, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | STAGE_DEPTH,
+                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    } else {
+        /*no MSAA: copy the depth (the effects keep it as their depth test)*/
+        barrier_image(cmd, g_depth.img, da, 1, 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, STAGE_DEPTH, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+        barrier_image(cmd, g_zbuf.img, da, 1, 1, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        VkImageCopy rg = {.srcSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1},
+                          .dstSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1},
+                          .extent = {g_rext.width, g_rext.height, 1}};
+        vkCmdCopyImage(cmd, g_depth.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, g_zbuf.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &rg);
+        depth_to_sampled(cmd, &g_zbuf, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_ACCESS_TRANSFER_WRITE_BIT);
+        barrier_image(cmd, g_depth.img, da, 1, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, STAGE_DEPTH,
+                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
+    }
+}
+
+/*Ambient occlusion at half resolution, then its edge-aware blur.*/
+static void pass_ssao(VkCommandBuffer cmd, const SceneFrame *s) {
+    m4 vp, inv;
+    memcpy(vp.m, s->u.viewproj, sizeof(vp.m));
+    if (!m4invert(&vp, &inv)) return;
+    to_attachment(cmd, &g_ao);
+    begin_color(cmd, g_ao.view, image_ext(&g_ao), VK_ATTACHMENT_LOAD_OP_DONT_CARE, NULL);
+    struct {
+        float inv_vp[16];
+        float cam[4];
+        float params[4];
+    } pc;
+    memcpy(pc.inv_vp, inv.m, sizeof(pc.inv_vp));
+    pc.cam[0] = s->u.cam_pos[0];
+    pc.cam[1] = s->u.cam_pos[1];
+    pc.cam[2] = s->u.cam_pos[2];
+    /*pixels of the AO image per world unit at distance 1 (vertical fov 0.70)*/
+    pc.cam[3] = (float)g_ao.h * 0.5f / tanf(0.35f);
+    pc.params[0] = 1.0f / (float)g_zbuf.w;
+    pc.params[1] = 1.0f / (float)g_zbuf.h;
+    pc.params[2] = 0.55f; /*radius in tiles*/
+    pc.params[3] = 1.1f;  /*intensity*/
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_p_ssao);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pl_ssao, 0, 1, &g_set_ssao, 0, NULL);
+    vkCmdPushConstants(cmd, g_pl_ssao, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+    to_sampled(cmd, &g_ao);
+    to_attachment(cmd, &g_ao_blur);
+    begin_color(cmd, g_ao_blur.view, image_ext(&g_ao_blur), VK_ATTACHMENT_LOAD_OP_DONT_CARE, NULL);
+    float bp[16] = {1.0f / (float)g_ao.w, 1.0f / (float)g_ao.h, s->u.proj[0], s->u.proj[1]};
+    post_draw(cmd, g_p_ssao_blur, g_set_ssao_blur, bp);
+    vkCmdEndRendering(cmd);
+    to_sampled(cmd, &g_ao_blur);
+}
+
+/*Ambient occlusion on the opaque scene, then transparent and additive
+ * effects (soft against the depth); resolves the MSAA image.*/
+static void pass_effects(Frame *f, VkCommandBuffer cmd, const SceneFrame *s, bool ao) {
+    bool ms = g_hdr_ms.img != VK_NULL_HANDLE;
+    VkMemoryBarrier mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                          .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                          .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | STAGE_DEPTH,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | STAGE_DEPTH, 0, 1, &mb, 0, NULL, 0, NULL);
+    if (ms) to_attachment(cmd, &g_hdr);
+    begin_scene(cmd, false, true, s);
+    if (ao) {
+        float pc[16] = {0};
+        post_draw(cmd, g_p_ao_apply, g_set_ao_apply, pc);
+    }
+    if (g_tex_mat.view) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pl_scene, 0, 1, &f->set_trans, 0, NULL);
         draw_scene_stream(f, cmd, g_p_trans, 1, s->trans, s->trans_count);
         draw_scene_stream(f, cmd, g_p_add, 2, s->add, s->add_count);
     }
@@ -1299,8 +1705,16 @@ static void vk_render(const SceneFrame *s, const UIFrame *ui, int w, int h) {
             record_image_upload(cmd, f, &g_tex_atlas, ui->atlas, (size_t)ui->atlas_w * ui->atlas_h * 4, first, false, NULL);
         atlas_ver = ui->atlas_version;
     }
-    update_descriptors(f);
-    if (s->draw_scene) memcpy(f->ubo.map, &s->u, sizeof(SceneUniforms));
+    update_descriptors(f, s);
+    if (s->draw_scene) {
+        SceneUniforms *u = f->ubo.map;
+        memcpy(u, &s->u, sizeof(SceneUniforms));
+        /*what this renderer turns on: shadow maps, soft particles (with SSAO)*/
+        u->shadow[0] = sun_shadows_on(s) ? 1.0f : 0.0f;
+        u->shadow[1] = torch_shadows_on(s) ? 1.0f : 0.0f;
+        u->proj[2] = g_rs.ssao ? (float)g_rext.width : 0.0f;
+        u->proj[3] = (float)g_rext.height;
+    }
 
     /*--- rendering ---*/
     VkImage swap_img = g_images[idx];
@@ -1308,7 +1722,11 @@ static void vk_render(const SceneFrame *s, const UIFrame *ui, int w, int h) {
     bool bloom = scene && g_rs.bloom && g_nbloom > 0 && s->post.bloom > 0;
     bool fxaa = scene && g_ldr.img;
     if (scene) {
-        pass_scene(f, cmd, s);
+        pass_shadows(f, cmd, s);
+        pass_opaque(f, cmd, s);
+        bool ao = g_rs.ssao && g_ao.img;
+        if (ao) pass_ssao(cmd, s);
+        pass_effects(f, cmd, s, ao);
         if (bloom) pass_bloom(cmd);
         else if (g_nbloom) {
             /*the composite set samples bloom[0]: give it a valid layout*/
@@ -1459,18 +1877,21 @@ static void vk_shutdown(void) {
     image_destroy(&g_tex_atlas);
     image_destroy(&g_tex_expl);
     image_destroy(&g_tex_dummy);
+    image_destroy(&g_dummy_depth);
+    image_destroy(&g_dummy_cube);
     swapchain_destroy();
     if (g_swap) vkDestroySwapchainKHR(g_dev, g_swap, NULL);
     pipelines_destroy();
     if (g_pl_scene) vkDestroyPipelineLayout(g_dev, g_pl_scene, NULL);
     if (g_pl_ui) vkDestroyPipelineLayout(g_dev, g_pl_ui, NULL);
     if (g_pl_post) vkDestroyPipelineLayout(g_dev, g_pl_post, NULL);
+    if (g_pl_ssao) vkDestroyPipelineLayout(g_dev, g_pl_ssao, NULL);
     if (g_dsl_scene) vkDestroyDescriptorSetLayout(g_dev, g_dsl_scene, NULL);
     if (g_dsl_ui) vkDestroyDescriptorSetLayout(g_dev, g_dsl_ui, NULL);
     if (g_dsl_post) vkDestroyDescriptorSetLayout(g_dev, g_dsl_post, NULL);
     if (g_dpool) vkDestroyDescriptorPool(g_dev, g_dpool, NULL);
-    VkSampler ss[3] = {g_samp_mat, g_samp_linear, g_samp_nearest};
-    for (int i = 0; i < 3; i++)
+    VkSampler ss[4] = {g_samp_mat, g_samp_linear, g_samp_nearest, g_samp_shadow};
+    for (int i = 0; i < 4; i++)
         if (ss[i]) vkDestroySampler(g_dev, ss[i], NULL);
     if (g_pool) vkDestroyCommandPool(g_dev, g_pool, NULL);
     vkDestroyDevice(g_dev, NULL);
@@ -1480,10 +1901,10 @@ static void vk_shutdown(void) {
     g_surface = VK_NULL_HANDLE;
     g_inst = VK_NULL_HANDLE;
     g_swap = VK_NULL_HANDLE;
-    g_pl_scene = g_pl_ui = g_pl_post = VK_NULL_HANDLE;
+    g_pl_scene = g_pl_ui = g_pl_post = g_pl_ssao = VK_NULL_HANDLE;
     g_dsl_scene = g_dsl_ui = g_dsl_post = VK_NULL_HANDLE;
     g_dpool = VK_NULL_HANDLE;
-    g_samp_mat = g_samp_linear = g_samp_nearest = VK_NULL_HANDLE;
+    g_samp_mat = g_samp_linear = g_samp_nearest = g_samp_shadow = VK_NULL_HANDLE;
     g_pool = VK_NULL_HANDLE;
     world_ver = atlas_ver = expl_ver = 0xFFFFFFFFu;
     g_world_count = 0;
@@ -1494,7 +1915,8 @@ static const char *vk_device_name(void) { return g_device; }
 /*Render scale and FXAA change the targets; MSAA also the scene pipelines
  * (handled at the start of the next frame).*/
 static void vk_configure(const RenderSettings *rs) {
-    if (rs->aa != g_rs.aa || rs->render_scale != g_rs.render_scale) g_need_recreate = true;
+    if (rs->aa != g_rs.aa || rs->render_scale != g_rs.render_scale || rs->shadows != g_rs.shadows || rs->ssao != g_rs.ssao)
+        g_need_recreate = true;
     g_rs = *rs;
 }
 
@@ -1509,5 +1931,5 @@ const GfxBackend gfx_vk_backend = {
     vk_shutdown,
     vk_device_name,
     vk_configure,
-    GFX_CAP_MSAA,
+    GFX_CAP_MSAA | GFX_CAP_SHADOWS | GFX_CAP_SSAO,
 };

@@ -112,6 +112,16 @@ static inline m4 m4perspective(float fovy, float aspect, float zn, float zf) {
     r.m[14] = (2.0f * zf * zn) / (zn - zf);
     return r;
 }
+static inline m4 m4ortho(float l, float r, float b, float t, float zn, float zf) {
+    m4 o = m4identity();
+    o.m[0] = 2.0f / (r - l);
+    o.m[5] = 2.0f / (t - b);
+    o.m[10] = -2.0f / (zf - zn);
+    o.m[12] = -(r + l) / (r - l);
+    o.m[13] = -(t + b) / (t - b);
+    o.m[14] = -(zf + zn) / (zf - zn);
+    return o;
+}
 static inline m4 m4lookat(v3 eye, v3 at, v3 up) {
     v3 f = v3norm(v3sub(at, eye));
     v3 s = v3norm(v3cross(f, up));

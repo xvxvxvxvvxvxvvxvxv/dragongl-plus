@@ -214,7 +214,7 @@ static GLuint tex_mat, tex_atlas, tex_expl;
 static uint32_t world_ver = 0xFFFFFFFFu, atlas_ver = 0xFFFFFFFFu, expl_ver = 0xFFFFFFFFu;
 static size_t vbo_world_cap, vbo_dyn_cap, vbo_ui_cap;
 static char g_device[256];
-static RenderSettings g_rs = {GFX_AA_MSAA, true, 1.0f};
+static RenderSettings g_rs = {GFX_AA_MSAA, true, 1.0f, 0, false};
 static int g_max_samples;
 
 static GLuint compile(GLenum type, const char *name) {

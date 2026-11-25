@@ -91,6 +91,10 @@ typedef struct {
     float misc[4];         /*x = light count, y = explored map size, zw unused*/
     float sun_dir[4];      /*xyz = direction towards the sun, w = intensity (0 = no sun)*/
     float sun_col[4];      /*rgb*/
+    float sun_vp[16];      /*sun shadow map: world -> clip (orthographic, around the player)*/
+    float shadow[4];       /*x = sun shadows on, y = light 0 shadows on (set by the renderer),
+                             z = light 0 is the player's light, w = sun shadow texel size*/
+    float proj[4];         /*camera near, far; renderer: 3D image width, height*/
     GfxLight lights[GFX_MAX_LIGHTS];
     float mat_params[GFX_MAX_MATERIALS / 2][4]; /*per material: specular strength, roughness*/
 } SceneUniforms;
@@ -111,6 +115,8 @@ typedef struct {
     int aa;                /*GFX_AA_**/
     bool bloom;
     float render_scale;    /*0.5 .. 1: size of the 3D image (the interface stays sharp)*/
+    int shadows;           /*0 off, 1 medium, 2 high (sun and torch shadow maps)*/
+    bool ssao;             /*ambient occlusion (and soft particles)*/
 } RenderSettings;
 
 /*Explored-tiles mask (R8, MAP_WIDTH x MAP_HEIGHT): fragments on tiles
@@ -122,9 +128,17 @@ typedef struct {
     uint32_t version;
 } GfxExplored;
 
+/*Part of the world vertex buffer built from one map chunk, with its
+ * bounds on the ground: shadow passes draw only what is near the light.*/
+typedef struct {
+    uint32_t first, count;
+    float x0, z0, x1, z1;
+} GfxRange;
+
 typedef struct {
     bool draw_scene;
     const SVert *world; uint32_t world_count; uint32_t world_version;
+    const GfxRange *world_ranges; uint32_t world_nranges; /*cover world[] in order*/
     const SVert *dyn;   uint32_t dyn_count;   /*opaque, rebuilt each frame*/
     const SVert *trans; uint32_t trans_count; /*alpha blended, no depth write*/
     const SVert *add;   uint32_t add_count;   /*additive, no depth write*/
@@ -167,6 +181,8 @@ typedef struct {
 } GfxBackend;
 
 #define GFX_CAP_MSAA 1u
+#define GFX_CAP_SHADOWS 2u
+#define GFX_CAP_SSAO 4u
 
 extern const GfxBackend gfx_gl_backend;
 extern const GfxBackend gfx_vk_backend;

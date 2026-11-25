@@ -34,6 +34,8 @@ typedef struct {
     int antialias;        /*0 off, 1 FXAA, 2 MSAA (gfx.h GFX_AA_*)*/
     bool bloom;
     float render_scale;   /*0.5 .. 1: size of the 3D image*/
+    int shadows;          /*0 off, 1 medium, 2 high (Vulkan)*/
+    bool ssao;            /*ambient occlusion + soft particles (Vulkan)*/
     float brightness;
     int win_w, win_h;
     /*audio*/

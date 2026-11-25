@@ -58,6 +58,8 @@ static uint32_t g_built_version;
 static bool g_town;
 static Mesh g_world;
 static uint32_t g_world_version = 1;
+static GfxRange g_ranges[NCX * NCY]; /*one per chunk in g_world*/
+static uint32_t g_nranges;
 static int g_vis_cx0 = -1, g_vis_cy0, g_vis_cx1, g_vis_cy1;
 
 static const TileType (*M)[MAP_WIDTH];
@@ -588,9 +590,22 @@ bool world_update(const TileType map[MAP_HEIGHT][MAP_WIDTH], uint32_t map_versio
     if (changed) {
         g_vis_cx0 = cx0; g_vis_cx1 = cx1; g_vis_cy0 = cy0; g_vis_cy1 = cy1;
         mesh_reset(&g_world);
+        g_nranges = 0;
         for (int cy = cy0; cy <= cy1; cy++)
-            for (int cx = cx0; cx <= cx1; cx++)
-                if (g_chunks[cy][cx].built) mesh_append(&g_world, &g_chunks[cy][cx].opaque);
+            for (int cx = cx0; cx <= cx1; cx++) {
+                if (!g_chunks[cy][cx].built) continue;
+                uint32_t first = g_world.n;
+                mesh_append(&g_world, &g_chunks[cy][cx].opaque);
+                if (g_world.n == first) continue;
+                GfxRange *r = &g_ranges[g_nranges++];
+                r->first = first;
+                r->count = g_world.n - first;
+                /*walls and props can reach half a tile past the chunk*/
+                r->x0 = (float)(cx * CH) - 1.0f;
+                r->z0 = (float)(cy * CH) - 1.0f;
+                r->x1 = (float)(cx * CH + CH) + 1.0f;
+                r->z1 = (float)(cy * CH + CH) + 1.0f;
+            }
         g_world_version++;
     }
     return changed;
@@ -599,6 +614,11 @@ bool world_update(const TileType map[MAP_HEIGHT][MAP_WIDTH], uint32_t map_versio
 const Mesh *world_mesh(uint32_t *version) {
     *version = g_world_version;
     return &g_world;
+}
+
+const GfxRange *world_ranges(uint32_t *n) {
+    *n = g_nranges;
+    return g_ranges;
 }
 
 void world_append_trans(Mesh *dst) {

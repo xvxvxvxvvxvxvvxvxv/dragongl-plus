@@ -160,7 +160,8 @@ if(DRAGONGL_BUILD_CLIENT)
     # shaders/spv/SOURCES.sha256 records which sources the SPIR-V was built
     # from: without glslc, edited shaders and stale SPIR-V stop the build.
     set(SHADER_STAGES scene.vert scene.frag ui.vert ui.frag fullscreen.vert
-        bloom_down.frag bloom_up.frag composite.frag fxaa.frag)
+        bloom_down.frag bloom_up.frag composite.frag fxaa.frag
+        shadow.vert shadow_sun.frag shadow_cube.frag ssao.frag ssao_blur.frag ao_apply.frag)
     set(SHADER_INCLUDES common.glsl scene_ubo.glsl)
     find_program(GLSLC_EXECUTABLE glslc)
     set(shader_hashes "")

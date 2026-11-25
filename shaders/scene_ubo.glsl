@@ -9,6 +9,9 @@ UBO(0) Scene {
     vec4 misc;        // x = light count, y = explored map size
     vec4 sun_dir;     // xyz = towards the sun, w = intensity (0: no sun)
     vec4 sun_col;     // rgb
+    mat4 sun_vp;      // sun shadow map: world -> clip
+    vec4 shadow;      // x sun shadows on, y light 0 shadows on, z light 0 = player, w texel size
+    vec4 proj;        // near, far, 3D image width, height
     vec4 lights[64];  // 32 x (position + radius, colour + intensity)
     vec4 mat_params[32]; // 2 materials per vec4: (specular, roughness)
 };

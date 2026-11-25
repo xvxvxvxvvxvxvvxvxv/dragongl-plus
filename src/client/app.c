@@ -736,7 +736,8 @@ void app_run(void) {
             g_app.gfx->screenshot(&dw, &dh); /*arms the capture of this frame*/
         }
         ui_end_frame(&uf);
-        RenderSettings rs = {g_settings.antialias, g_settings.bloom, g_settings.render_scale};
+        RenderSettings rs = {g_settings.antialias, g_settings.bloom, g_settings.render_scale, g_settings.shadows,
+                             g_settings.ssao};
         g_app.gfx->configure(&rs);
         g_app.gfx->render(&sf, &uf, g_app.fb_w, g_app.fb_h);
         if (g_app.want_screenshot) {

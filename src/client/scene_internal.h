@@ -45,6 +45,7 @@ void world_reset(bool town);
 bool world_is_town(void);
 bool world_update(const TileType map[MAP_HEIGHT][MAP_WIDTH], uint32_t map_version, float fx, float fz, int radius);
 const Mesh *world_mesh(uint32_t *version);
+const GfxRange *world_ranges(uint32_t *n);
 void world_append_trans(Mesh *dst);
 int world_collect_lights(GfxLight *out, int max, float px, float pz, float radius);
 int world_collect_emitters(WorldEmitter *out, int max, float px, float pz, float radius);

@@ -1074,6 +1074,17 @@ void hud_settings_content(float x, float y, float w, float h) {
         cy += 46;
         ui_checkbox("Bloom (glow around lights and magic)", x, cy, &g_settings.bloom);
         cy += 40;
+        bool vkfx = (g_app.gfx->caps & GFX_CAP_SHADOWS) != 0;
+        ui_text(FONT_BODY, 17, x, cy + 12, "Shadows", COL_TEXT_DIM, ALIGN_MIDDLE);
+        const char *sh[3] = {"Off", "Medium", "High"};
+        for (int i = 0; i < 3; i++)
+            if (ui_button(sh[i], x + 220 + (float)i * 110, cy, 104, 30, g_settings.shadows == i ? BTN_TAB_ACTIVE : BTN_TAB))
+                g_settings.shadows = i;
+        if (!vkfx) ui_text(FONT_BODY, 14, x + 560, cy + 15, "Vulkan only", COL_ORANGE, ALIGN_MIDDLE);
+        cy += 46;
+        ui_checkbox("Ambient occlusion and soft particles", x, cy, &g_settings.ssao);
+        if (!vkfx) ui_text(FONT_BODY, 14, x + 560, cy + 12, "Vulkan only", COL_ORANGE, ALIGN_MIDDLE);
+        cy += 40;
         ui_text(FONT_BODY, 17, x, cy + 9, "3D resolution", COL_TEXT_DIM, ALIGN_MIDDLE);
         ui_slider("rscale", x + 220, cy, 300, &g_settings.render_scale, 0.5f, 1.0f);
         snprintf(buf, sizeof(buf), "%d%%", (int)(g_settings.render_scale * 100 + 0.5f));

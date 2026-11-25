@@ -480,6 +480,7 @@ void scene_frame(const FrameSnapshot *snap, const SceneInput *in, float dt, doub
     out->world = wm->v;
     out->world_count = wm->n;
     out->world_version = wver;
+    out->world_ranges = world_ranges(&out->world_nranges);
     world_append_trans(&g_trans);
 
     /*--- emitters & particles ---*/
@@ -789,7 +790,21 @@ void scene_frame(const FrameSnapshot *snap, const SceneInput *in, float dt, doub
         /*the sun now lights the faces turned to it: less flat sky light*/
         for (int k = 0; k < 3; k++) u->ambient[k] *= 1.0f - 0.35f * day;
         u->sun_col[0] = 1.0f; u->sun_col[1] = 0.93f - sunset * 0.25f; u->sun_col[2] = 0.82f - sunset * 0.40f;
+        /*its shadow map: an orthographic box around the player*/
+        v3 L = v3m(u->sun_dir[0], u->sun_dir[1], u->sun_dir[2]);
+        const float ext = 26.0f, size = 2048.0f;
+        /*centre snapped to whole shadow-map texels: no shimmering when walking*/
+        float texel = 2.0f * ext / size;
+        v3 c = v3m(floorf(pp.x / texel) * texel, 0, floorf(pp.z / texel) * texel);
+        m4 view = m4lookat(v3add(c, v3scale(L, 60.0f)), c, fabsf(L.y) > 0.99f ? v3m(0, 0, 1) : v3m(0, 1, 0));
+        m4 vp = m4mul(m4ortho(-ext, ext, -ext, ext, 1.0f, 140.0f), view);
+        memcpy(u->sun_vp, vp.m, sizeof(u->sun_vp));
+        u->shadow[3] = 1.0f / size; /*PCF step*/
     }
+    u->shadow[0] = u->shadow[1] = 0; /*the renderer turns them on*/
+    u->shadow[2] = in->title_mode ? 0.0f : 1.0f; /*light 0 is the player's torch*/
+    u->proj[0] = 0.3f; /*camera near and far planes (update_camera)*/
+    u->proj[1] = 200.0f;
     textures_material_params(&u->mat_params[0][0], GFX_MAX_MATERIALS);
     out->explored.data = &g_explored[0][0];
     out->explored.w = MAP_WIDTH;
