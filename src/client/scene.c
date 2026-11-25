@@ -775,8 +775,22 @@ void scene_frame(const FrameSnapshot *snap, const SceneInput *in, float dt, doub
     u->cut_dir[0] = fwdx; u->cut_dir[1] = fwdz; u->cut_dir[2] = 0; u->cut_dir[3] = (in->title_mode && !g_preview) ? 0.0f : 1.0f;
     u->misc[0] = (float)nl;
     u->misc[1] = (float)MAP_WIDTH;
-    u->misc[2] = 1.0f;
-    u->misc[3] = br;
+    u->misc[2] = 0;
+    u->misc[3] = 0;
+    /*sun: crosses the sky of the village from 6:00 to 20:00*/
+    memset(u->sun_dir, 0, sizeof(u->sun_dir));
+    if (town && day > 0 && !in->title_mode) {
+        float a = clampf((hour - 6.0f) / 14.0f, 0.02f, 0.98f) * 3.14159265f;
+        float sx = cosf(a), sy = sinf(a) * 0.85f + 0.15f, sz = 0.45f;
+        float len = sqrtf(sx * sx + sy * sy + sz * sz);
+        float sunset = smoothstepf(16.5f, 19.0f, hour);
+        u->sun_dir[0] = sx / len; u->sun_dir[1] = sy / len; u->sun_dir[2] = sz / len;
+        u->sun_dir[3] = day * 0.85f * br;
+        /*the sun now lights the faces turned to it: less flat sky light*/
+        for (int k = 0; k < 3; k++) u->ambient[k] *= 1.0f - 0.35f * day;
+        u->sun_col[0] = 1.0f; u->sun_col[1] = 0.93f - sunset * 0.25f; u->sun_col[2] = 0.82f - sunset * 0.40f;
+    }
+    textures_material_params(&u->mat_params[0][0], GFX_MAX_MATERIALS);
     out->explored.data = &g_explored[0][0];
     out->explored.w = MAP_WIDTH;
     out->explored.h = MAP_HEIGHT;
@@ -790,6 +804,25 @@ void scene_frame(const FrameSnapshot *snap, const SceneInput *in, float dt, doub
     out->clear_color[2] = u->fog_color[2];
     out->clear_color[3] = 1;
     out->vignette = 0.45f;
+
+    /*final look: exposure (brightness setting), glow, and a colour mood -
+     * warm village by day, cold blue night, dungeons colder the deeper*/
+    GfxPost *po = &out->post;
+    po->exposure = 1.35f * br;
+    po->bloom = in->title_mode ? 0.06f : 0.05f;
+    po->saturation = 1.08f;
+    po->contrast = 1.04f;
+    if (town) {
+        float night = 1.0f - day;
+        po->grade[0] = 1.02f - night * 0.10f;
+        po->grade[1] = 1.0f - night * 0.04f;
+        po->grade[2] = 0.96f + night * 0.10f;
+    } else {
+        float depth = in->title_mode ? 0.2f : clampf((float)snap->my_floor / 100.0f, 0, 1);
+        po->grade[0] = 1.0f - depth * 0.06f;
+        po->grade[1] = 0.99f - depth * 0.02f;
+        po->grade[2] = 1.02f + depth * 0.06f;
+    }
 
     out->dyn = g_dyn.v; out->dyn_count = g_dyn.n;
     out->trans = g_trans.v; out->trans_count = g_trans.n;

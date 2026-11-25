@@ -35,6 +35,9 @@ void settings_defaults(Settings *s) {
     s->vsync = true;
     s->ui_scale = 1.0f;
     s->quality = 2;
+    s->antialias = 2;
+    s->bloom = true;
+    s->render_scale = 1.0f;
     s->brightness = 1.0f;
     s->win_w = 1600;
     s->win_h = 900;
@@ -65,6 +68,7 @@ const char *settings_path(void) {
 #define KEYS(X)                                                        \
     X(backend, "%d", INT) X(fullscreen, "%d", BOOL) X(vsync, "%d", BOOL) \
     X(ui_scale, "%f", FLOAT) X(quality, "%d", INT) X(brightness, "%f", FLOAT) \
+    X(antialias, "%d", INT) X(bloom, "%d", BOOL) X(render_scale, "%f", FLOAT) \
     X(win_w, "%d", INT) X(win_h, "%d", INT)                            \
     X(vol_master, "%f", FLOAT) X(vol_music, "%f", FLOAT) X(vol_sfx, "%f", FLOAT) \
     X(mute_unfocused, "%d", BOOL) X(cam_sensitivity, "%f", FLOAT)      \
@@ -107,6 +111,8 @@ void settings_load(void) {
     fclose(f);
     if (g_settings.ui_scale < 0.6f || g_settings.ui_scale > 2.5f) g_settings.ui_scale = 1.0f;
     if (g_settings.quality < 0 || g_settings.quality > 2) g_settings.quality = 2;
+    if (g_settings.antialias < 0 || g_settings.antialias > 2) g_settings.antialias = 2;
+    if (!(g_settings.render_scale >= 0.5f && g_settings.render_scale <= 1.0f)) g_settings.render_scale = 1.0f;
     if (g_settings.win_w < 800) g_settings.win_w = 1600;
     if (g_settings.win_h < 600) g_settings.win_h = 900;
 }

@@ -78,4 +78,8 @@ enum {
  * MAT_COUNT * MAT_TEX_SIZE * MAT_TEX_SIZE * 4 bytes (layer-major).*/
 uint8_t *textures_generate(void);
 
+/*Specular strength and roughness of every material, packed for the
+ * scene uniforms (2 materials per vec4): out[m*2], out[m*2+1].*/
+void textures_material_params(float *out, int max_materials);
+
 #endif

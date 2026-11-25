@@ -38,18 +38,6 @@ extern const size_t asset_icon64_size;
 extern const unsigned char asset_icon32[];
 extern const size_t asset_icon32_size;
 
-/*SPIR-V for the Vulkan backend (4-byte aligned)*/
-extern const unsigned char asset_spv_scene_vert[];
-extern const size_t asset_spv_scene_vert_size;
-extern const unsigned char asset_spv_scene_frag[];
-extern const size_t asset_spv_scene_frag_size;
-extern const unsigned char asset_spv_ui_vert[];
-extern const size_t asset_spv_ui_vert_size;
-extern const unsigned char asset_spv_ui_frag[];
-extern const size_t asset_spv_ui_frag_size;
-extern const unsigned char asset_spv_post_vert[];
-extern const size_t asset_spv_post_vert_size;
-extern const unsigned char asset_spv_post_frag[];
-extern const size_t asset_spv_post_frag_size;
+/*Shaders: see shaders.h (GLSL text for OpenGL, SPIR-V for Vulkan).*/
 
 #endif

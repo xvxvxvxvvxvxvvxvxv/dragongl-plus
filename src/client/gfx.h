@@ -76,8 +76,11 @@ typedef struct {
     float col[4]; /*rgb, a = intensity*/
 } GfxLight;
 
+#define GFX_MAX_MATERIALS 64
+
 /*Uniform block shared by every scene shader (std140-compatible:
- * vec4-aligned members only).*/
+ * vec4-aligned members only). Mirror: shaders/scene_ubo.glsl.
+ * Colours are sRGB values (the shaders convert them to linear).*/
 typedef struct {
     float viewproj[16];
     float cam_pos[4];      /*xyz, w = time (seconds)*/
@@ -85,9 +88,30 @@ typedef struct {
     float ambient[4];      /*rgb, a = memory brightness (explored, unseen)*/
     float fog_color[4];    /*rgb, a = fog density*/
     float cut_dir[4];      /*xz = camera forward on the ground, z unused, w = cut-away on/off*/
-    float misc[4];         /*x = light count, y = explored map size, z = saturation, w = exposure*/
+    float misc[4];         /*x = light count, y = explored map size, zw unused*/
+    float sun_dir[4];      /*xyz = direction towards the sun, w = intensity (0 = no sun)*/
+    float sun_col[4];      /*rgb*/
     GfxLight lights[GFX_MAX_LIGHTS];
+    float mat_params[GFX_MAX_MATERIALS / 2][4]; /*per material: specular strength, roughness*/
 } SceneUniforms;
+
+/*Look of the final image (post-processing), chosen by the scene.*/
+typedef struct {
+    float exposure;        /*linear multiplier before the tone curve*/
+    float bloom;           /*strength of the glow around bright lights*/
+    float saturation;      /*1 = unchanged*/
+    float contrast;        /*1 = unchanged*/
+    float grade[3];        /*colour multiplier (biome / time of day mood)*/
+} GfxPost;
+
+/*Renderer options (graphics settings). Effects a backend does not have
+ * are ignored (see GfxBackend.caps).*/
+enum { GFX_AA_OFF = 0, GFX_AA_FXAA = 1, GFX_AA_MSAA = 2 };
+typedef struct {
+    int aa;                /*GFX_AA_**/
+    bool bloom;
+    float render_scale;    /*0.5 .. 1: size of the 3D image (the interface stays sharp)*/
+} RenderSettings;
 
 /*Explored-tiles mask (R8, MAP_WIDTH x MAP_HEIGHT): fragments on tiles
  * never seen are not drawn, tiles seen but out of view are drawn as a
@@ -109,6 +133,7 @@ typedef struct {
     float clear_color[4];
     float screen_tint[4];  /*rgb, a = full-screen overlay (damage flash, fades)*/
     float vignette;        /*0..1 darkening of the screen corners*/
+    GfxPost post;
 } SceneFrame;
 
 typedef struct {
@@ -136,7 +161,12 @@ typedef struct {
     void (*shutdown)(void);
     /*Human-readable GPU/driver line for the settings screen.*/
     const char *(*device_name)(void);
+    /*Apply graphics settings (may rebuild render targets).*/
+    void (*configure)(const RenderSettings *rs);
+    unsigned caps;         /*GFX_CAP_*: effects this renderer has*/
 } GfxBackend;
+
+#define GFX_CAP_MSAA 1u
 
 extern const GfxBackend gfx_gl_backend;
 extern const GfxBackend gfx_vk_backend;

@@ -31,6 +31,9 @@ typedef struct {
     bool vsync;
     float ui_scale;       /*multiplier over the automatic scale*/
     int quality;          /*0 low, 1 medium, 2 high (particles, lights)*/
+    int antialias;        /*0 off, 1 FXAA, 2 MSAA (gfx.h GFX_AA_*)*/
+    bool bloom;
+    float render_scale;   /*0.5 .. 1: size of the 3D image*/
     float brightness;
     int win_w, win_h;
     /*audio*/

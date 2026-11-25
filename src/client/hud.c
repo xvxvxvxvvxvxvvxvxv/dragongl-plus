@@ -1064,7 +1064,21 @@ void hud_settings_content(float x, float y, float w, float h) {
         const char *q[3] = {"Low", "Medium", "High"};
         for (int i = 0; i < 3; i++)
             if (ui_button(q[i], x + 220 + (float)i * 110, cy, 104, 30, g_settings.quality == i ? BTN_TAB_ACTIVE : BTN_TAB)) g_settings.quality = i;
-        cy += 50;
+        cy += 46;
+        ui_text(FONT_BODY, 17, x, cy + 12, "Anti-aliasing", COL_TEXT_DIM, ALIGN_MIDDLE);
+        const char *aa[3] = {"Off", "FXAA", "MSAA 4x"};
+        int naa = (g_app.gfx->caps & GFX_CAP_MSAA) ? 3 : 2;
+        for (int i = 0; i < naa; i++)
+            if (ui_button(aa[i], x + 220 + (float)i * 110, cy, 104, 30, g_settings.antialias == i ? BTN_TAB_ACTIVE : BTN_TAB))
+                g_settings.antialias = i;
+        cy += 46;
+        ui_checkbox("Bloom (glow around lights and magic)", x, cy, &g_settings.bloom);
+        cy += 40;
+        ui_text(FONT_BODY, 17, x, cy + 9, "3D resolution", COL_TEXT_DIM, ALIGN_MIDDLE);
+        ui_slider("rscale", x + 220, cy, 300, &g_settings.render_scale, 0.5f, 1.0f);
+        snprintf(buf, sizeof(buf), "%d%%", (int)(g_settings.render_scale * 100 + 0.5f));
+        ui_text(FONT_BODY, 15, x + 540, cy + 9, buf, COL_TEXT, ALIGN_MIDDLE);
+        cy += 46;
         ui_text(FONT_BODY, 17, x, cy + 9, "Brightness", COL_TEXT_DIM, ALIGN_MIDDLE);
         ui_slider("bright", x + 220, cy, 300, &g_settings.brightness, 0.6f, 1.8f);
         cy += 46;

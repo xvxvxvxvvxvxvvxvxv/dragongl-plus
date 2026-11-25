@@ -729,3 +729,35 @@ uint8_t *textures_generate(void) {
     }
     return g_buf;
 }
+
+/*How shiny each surface is: specular strength (0 = matte) and roughness
+ * (0 = mirror, 1 = rough). Wet, polished and metallic materials stand
+ * out under torches; stone, cloth and soil stay matte.*/
+void textures_material_params(float *out, int max_materials) {
+    static float params[MAT_COUNT][2];
+    static int done;
+    if (!done) {
+        done = 1;
+        for (int m = 0; m < MAT_COUNT; m++) {
+            params[m][0] = 0.08f;
+            params[m][1] = 0.8f;
+        }
+        static const struct { int m; float spec, rough; } shiny[] = {
+            {MAT_WATER, 0.9f, 0.18f},   {MAT_LAVA, 0.3f, 0.45f},    {MAT_ICE, 0.7f, 0.22f},
+            {MAT_MARBLE, 0.45f, 0.32f}, {MAT_OBSIDIAN, 0.6f, 0.2f}, {MAT_GOLD_VEIN, 0.5f, 0.35f},
+            {MAT_CRYSTAL, 0.8f, 0.2f},  {MAT_IRON, 0.55f, 0.38f},   {MAT_METAL, 0.7f, 0.3f},
+            {MAT_GOLD, 0.8f, 0.28f},    {MAT_SLIME, 0.6f, 0.25f},   {MAT_SCALES, 0.35f, 0.4f},
+            {MAT_MUD, 0.2f, 0.5f},      {MAT_SKIN, 0.12f, 0.6f},    {MAT_LEATHER, 0.15f, 0.55f},
+            {MAT_FLAGSTONE, 0.1f, 0.7f}, {MAT_COBBLE, 0.1f, 0.7f},  {MAT_BONE, 0.12f, 0.6f},
+            {MAT_DOOR, 0.1f, 0.65f},    {MAT_PLANK, 0.08f, 0.7f},
+        };
+        for (size_t i = 0; i < sizeof(shiny) / sizeof(shiny[0]); i++) {
+            params[shiny[i].m][0] = shiny[i].spec;
+            params[shiny[i].m][1] = shiny[i].rough;
+        }
+    }
+    for (int m = 0; m < max_materials; m++) {
+        out[m * 2] = m < MAT_COUNT ? params[m][0] : 0.0f;
+        out[m * 2 + 1] = m < MAT_COUNT ? params[m][1] : 1.0f;
+    }
+}

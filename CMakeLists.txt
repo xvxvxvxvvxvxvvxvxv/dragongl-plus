@@ -153,11 +153,43 @@ if(DRAGONGL_BUILD_CLIENT)
     dragongl_embed(${CMAKE_CURRENT_SOURCE_DIR}/res/icon64.rgba asset_icon64)
     dragongl_embed(${CMAKE_CURRENT_SOURCE_DIR}/res/icon32.rgba asset_icon32)
 
-    # Vulkan shaders: compiled with glslc when available, otherwise the
-    # pre-built SPIR-V in shaders/spv/ is used (so no Vulkan SDK is needed
-    # to build the game).
+    # Shaders: shaders/*.vert|frag are the only shader sources of both
+    # renderers. Vulkan uses SPIR-V compiled by glslc when it is installed,
+    # otherwise the pre-built copies in shaders/spv/ (no Vulkan SDK needed
+    # to build the game); OpenGL compiles the GLSL text, embedded as is.
+    # shaders/spv/SOURCES.sha256 records which sources the SPIR-V was built
+    # from: without glslc, edited shaders and stale SPIR-V stop the build.
+    set(SHADER_STAGES scene.vert scene.frag ui.vert ui.frag fullscreen.vert
+        bloom_down.frag bloom_up.frag composite.frag fxaa.frag)
+    set(SHADER_INCLUDES common.glsl scene_ubo.glsl)
     find_program(GLSLC_EXECUTABLE glslc)
-    foreach(sh scene.vert scene.frag ui.vert ui.frag post.vert post.frag)
+    set(shader_hashes "")
+    set(shader_include_paths "")
+    foreach(sh ${SHADER_INCLUDES} ${SHADER_STAGES})
+        set(src ${CMAKE_CURRENT_SOURCE_DIR}/shaders/${sh})
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${src})
+        file(SHA256 ${src} h)
+        string(APPEND shader_hashes "${h}  ${sh}\n")
+        string(REPLACE "." "_" shn ${sh})
+        dragongl_embed(${src} asset_glsl_${shn})
+    endforeach()
+    foreach(sh ${SHADER_INCLUDES})
+        list(APPEND shader_include_paths ${CMAKE_CURRENT_SOURCE_DIR}/shaders/${sh})
+    endforeach()
+    set(shader_stamp ${CMAKE_CURRENT_SOURCE_DIR}/shaders/spv/SOURCES.sha256)
+    if(GLSLC_EXECUTABLE)
+        file(WRITE ${shader_stamp} "${shader_hashes}")
+    else()
+        set(old_hashes "")
+        if(EXISTS ${shader_stamp})
+            file(READ ${shader_stamp} old_hashes)
+        endif()
+        if(NOT old_hashes STREQUAL shader_hashes)
+            message(FATAL_ERROR "The shaders in shaders/ were changed after shaders/spv/ was built: "
+                "install glslc (shaderc, or the Vulkan SDK) to compile them.")
+        endif()
+    endif()
+    foreach(sh ${SHADER_STAGES})
         string(REPLACE "." "_" shn ${sh})
         set(src ${CMAKE_CURRENT_SOURCE_DIR}/shaders/${sh})
         set(prebuilt ${CMAKE_CURRENT_SOURCE_DIR}/shaders/spv/${sh}.spv)
@@ -165,9 +197,9 @@ if(DRAGONGL_BUILD_CLIENT)
             set(spv ${DRAGONGL_GENERATED_DIR}/${sh}.spv)
             add_custom_command(
                 OUTPUT ${spv}
-                COMMAND ${GLSLC_EXECUTABLE} -O ${src} -o ${spv}
+                COMMAND ${GLSLC_EXECUTABLE} -O -I ${CMAKE_CURRENT_SOURCE_DIR}/shaders ${src} -o ${spv}
                 COMMAND ${CMAKE_COMMAND} -E copy ${spv} ${prebuilt}
-                DEPENDS ${src}
+                DEPENDS ${src} ${shader_include_paths}
                 COMMENT "Compiling shader ${sh}")
         else()
             set(spv ${prebuilt})
@@ -191,6 +223,7 @@ if(DRAGONGL_BUILD_CLIENT)
         src/client/path.c
         src/client/gfx_gl.c
         src/client/gfx_vk.c
+        src/client/shaders.c
         src/client/audio.c
         src/client/music.c
         src/client/session.c
