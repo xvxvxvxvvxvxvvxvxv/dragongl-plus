@@ -69,6 +69,7 @@ set(DRAGONGL_SHARED_SRCS
     "${DRAGONGL_ROOT}/src/shared/wire.c"
     "${DRAGONGL_ROOT}/src/shared/strnum.c"
     "${DRAGONGL_ROOT}/src/shared/tls_common.c"
+    "${DRAGONGL_ROOT}/src/shared/wire_plus.c" # DragonGL+: protocol extension
 )
 # The part of the shared code the client uses: the protocol, the TLS
 # fingerprints, the frame-time histogram, the ability rolls of character
@@ -82,6 +83,7 @@ set(DRAGONGL_CLIENT_SHARED_SRCS
     "${DRAGONGL_ROOT}/src/shared/wire.c"
     "${DRAGONGL_ROOT}/src/shared/strnum.c"
     "${DRAGONGL_ROOT}/src/shared/tls_common.c"
+    "${DRAGONGL_ROOT}/src/shared/wire_plus.c" # DragonGL+
 )
 # Every server module but main(): the server links them with
 # main_server.c, the in-process test harness and the fuzzers with their own
@@ -138,6 +140,8 @@ set(DRAGONGL_SERVER_LIB_SRCS
     # DragonGL+: characters of DragonGL+ 2026.10 (--import-legacy)
     "${DRAGONGL_ROOT}/src/server/legacy_import.c"
     "${DRAGONGL_ROOT}/src/server/legacy_tables.c"
+    # DragonGL+: the protocol extension (protocol_plus.h)
+    "${DRAGONGL_ROOT}/src/server/server_plus.c"
 )
 set(DRAGONGL_SERVER_SRCS "${DRAGONGL_ROOT}/src/server/main_server.c" ${DRAGONGL_SERVER_LIB_SRCS})
 

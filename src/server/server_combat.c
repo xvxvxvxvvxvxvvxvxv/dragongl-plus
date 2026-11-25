@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include "server_plus.h"
 #include "server_combat.h"
 #include "item_effects.h"
 #include "spell_cast.h"
@@ -115,6 +116,9 @@ int npc_killed(Game *game, Client *c, NPC *t, const char *by) {
         t->y >= 0 && t->y < MAP_HEIGHT) {
         game->world->floors[t->floor_id].entity_grid[t->y][t->x] = 0;
     }
+    /*DragonGL+: the fall of the creature (animation, sound)*/
+    plus_broadcast_event(game, t->floor_id, GEV_KILL, c ? c->entity_id : 0, t->entity_id, 0, t->x,
+                         t->y);
     if (!c) {
         clog_death(npc_name(t), "the environment", t->floor_id);
         if (t->archetype == ARCH_BOSS) {
@@ -486,9 +490,13 @@ static void player_strike(Client *c, NPC *t, Game *game, bool shot) {
                             " %s, leaving not even a scratch.",
                             npc_name(t));
         send_combat_event(c->sock, COMBAT_EV_MISS_DEALT, t->entity_id, 0);
+        plus_broadcast_event(game, c->floor_id, GEV_ATTACK_MISS, c->entity_id, t->entity_id, 0, t->x,
+                             t->y);
         return;
     }
     int d = strike_damage(c, t, weapon, w, ability, is_crit);
+    plus_broadcast_event(game, c->floor_id, is_crit ? GEV_ATTACK_CRIT : GEV_ATTACK_HIT, c->entity_id,
+                         t->entity_id, d, t->x, t->y);
     send_combat_event(c->sock, is_crit ? COMBAT_EV_CRITICAL : COMBAT_EV_DAMAGE_DEALT, t->entity_id,
                       d);
     clog_attack(c->username, npc_name(t), roll_v, ctx.final_value, ac, true, is_crit, d);
@@ -667,6 +675,8 @@ void perform_attack_npc(NPC *n, Client *c, Game *game) {
     if (hit) {
         int d = npc_blow(n, c, is_crit);
         send_combat_event(c->sock, COMBAT_EV_DAMAGE_TAKEN, c->entity_id, d);
+        plus_broadcast_event(game, c->floor_id, is_crit ? GEV_ATTACK_CRIT : GEV_ATTACK_HIT,
+                             n->entity_id, c->entity_id, d, c->x, c->y);
         clog_attack(npc_name(n), c->username, roll_v, n_bonus, p_ac, true, is_crit, d);
         /*Wear: 3% of the hits received cost the armour a point.*/
         wear_item(c, &c->slot_body, 3, "armor");
@@ -680,6 +690,8 @@ void perform_attack_npc(NPC *n, Client *c, Game *game) {
         clog_attack(npc_name(n), c->username, roll_v, n_bonus, p_ac, false, false, 0);
         send_text_to_client(c->sock, "[COMBAT] %s missed you!", npc_name(n));
         send_combat_event(c->sock, COMBAT_EV_MISS_TAKEN, c->entity_id, 0);
+        plus_broadcast_event(game, c->floor_id, GEV_ATTACK_MISS, n->entity_id, c->entity_id, 0, c->x,
+                             c->y);
     }
 }
 
@@ -738,6 +750,8 @@ void handle_boss_death(Game *game, Client *c, NPC *boss) {
     }
     int boss_index = (boss->floor_id / 10) - 1;
     uint32_t bit = 1u << boss_index;
+    plus_broadcast_event(game, boss->floor_id, GEV_BOSS_DEFEATED, c ? c->entity_id : 0,
+                         boss->entity_id, boss->floor_id, boss->x, boss->y); /*DragonGL+*/
     const char *boss_name = "Boss";
     if (boss->custom_name[0] != '\0') {
         boss_name = boss->custom_name;

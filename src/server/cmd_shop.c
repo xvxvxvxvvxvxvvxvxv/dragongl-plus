@@ -26,6 +26,7 @@
  * which handler sees which command.
  */
 
+#include "server_plus.h"
 #include "strnum.h"
 #include "server_cmd.h"
 #include "server_internal.h"
@@ -88,6 +89,7 @@ bool cmd_list(Client *c, const char *cmd, Game *game) {
     NPC *m = nearby_merchant(c, game);
     if (m) {
         print_merchant_inventory(c, npc_shop_any(&game->pools, m));
+        plus_open_shop(game, c, m); /*DragonGL+: the shop window*/
     } else {
         send_text_to_client(c->sock, "[SYSTEM] No merchant or tombstone next to you.");
     }
@@ -128,8 +130,9 @@ static float shop_scarcity(const MerchantData *m, int shelf) {
 _Static_assert(SHOP_MIN_BUY_PCT > SHOP_MAX_SELL_PCT, "buying and selling back would make gold");
 _Static_assert(SHOP_MIN_BUY_PCT == 50, "LORE.md: discounts down to 0.5x cost");
 
-/*What the player pays for the item on the shelf, haggled by multiplier.*/
-static uint64_t shop_buy_price(const MerchantData *m, int shelf, float multiplier) {
+/*What the player pays for the item on the shelf, haggled by multiplier
+ * (DragonGL+: also the price in the shop window, server_plus.c).*/
+uint64_t shop_buy_price(const MerchantData *m, int shelf, float multiplier) {
     uint64_t cost = item_database[m->item_templates[shelf]].cost;
     uint64_t price = (uint64_t)((float)cost * shop_scarcity(m, shelf) * multiplier);
     uint64_t floor_price = cost * SHOP_MIN_BUY_PCT / 100;
@@ -613,6 +616,7 @@ bool cmd_talk(Client *c, const char *cmd, Game *game) {
                         " 'haggle buy/sell', 'identify [n]', 'repair [name]', 'uncurse', 'cure'.",
                         npc_shop_any(&game->pools, m)->shop_name);
     print_merchant_inventory(c, npc_shop_any(&game->pools, m));
+    plus_open_shop(game, c, m); /*DragonGL+: the shop window*/
     return true;
 }
 

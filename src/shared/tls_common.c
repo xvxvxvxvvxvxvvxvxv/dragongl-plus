@@ -17,6 +17,8 @@
 #include <openssl/err.h>
 #include <openssl/evp.h>
 
+#include "protocol_plus.h"
+
 #define STR2(x)   #x
 #define STR(x)    STR2(x)
 #define ALPN_NAME "dragongl/" STR(PROTOCOL_VERSION)
@@ -26,6 +28,13 @@
 _Static_assert(sizeof(ALPN_NAME) - 1 == 10, "update the length byte of TLS_ALPN");
 const unsigned char TLS_ALPN[] = "\x0a" ALPN_NAME;
 const unsigned int TLS_ALPN_LEN = (unsigned int)sizeof(TLS_ALPN) - 1; /* without the NUL */
+
+/* DragonGL+: the extension first (protocol_plus.h), then plain v5. A
+ * DragonGL+ client offers both and a DragonGL+ server prefers the
+ * extension; an upstream client offers only v5 and gets it. */
+_Static_assert(sizeof(TLS_ALPN_PLUS_NAME) - 1 == 17, "update the length byte of TLS_ALPN_ALL");
+const unsigned char TLS_ALPN_ALL[] = "\x11" TLS_ALPN_PLUS_NAME "\x0a" ALPN_NAME;
+const unsigned int TLS_ALPN_ALL_LEN = (unsigned int)sizeof(TLS_ALPN_ALL) - 1;
 
 bool tls_cert_fingerprint(X509 *cert, char *out, size_t cap) {
     unsigned char md[EVP_MAX_MD_SIZE];
@@ -97,7 +106,8 @@ void tls_error_text(char *out, size_t cap, const char *fallback) {
     ERR_clear_error();
 }
 
-/* Server side of ALPN: the client must offer exactly our protocol. */
+/* Server side of ALPN: the client must offer one of our protocols; the
+ * DragonGL+ extension wins when offered. */
 static int select_alpn(SSL *ssl, const unsigned char **out, unsigned char *outlen,
                        const unsigned char *in, unsigned int inlen, void *arg) {
     (void)ssl;
@@ -105,7 +115,7 @@ static int select_alpn(SSL *ssl, const unsigned char **out, unsigned char *outle
     unsigned char *sel = NULL;
     /* Server list first, then the client's: the argument order is right. */
     // NOLINTNEXTLINE(readability-suspicious-call-argument)
-    if (SSL_select_next_proto(&sel, outlen, TLS_ALPN, TLS_ALPN_LEN, in, inlen) !=
+    if (SSL_select_next_proto(&sel, outlen, TLS_ALPN_ALL, TLS_ALPN_ALL_LEN, in, inlen) !=
         OPENSSL_NPN_NEGOTIATED) {
         return SSL_TLSEXT_ERR_ALERT_FATAL;
     }
@@ -136,7 +146,7 @@ SSL_CTX *tls_new_context(bool server) {
          * handshake, and no ticket key has to be kept or rotated. */
         SSL_CTX_set_num_tickets(ctx, 0);
         SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
-    } else if (SSL_CTX_set_alpn_protos(ctx, TLS_ALPN, TLS_ALPN_LEN) != 0) {
+    } else if (SSL_CTX_set_alpn_protos(ctx, TLS_ALPN_ALL, TLS_ALPN_ALL_LEN) != 0) {
         SSL_CTX_free(ctx);
         return NULL;
     }

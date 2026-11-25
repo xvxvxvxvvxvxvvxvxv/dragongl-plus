@@ -168,3 +168,11 @@ add_test(NAME server_network
 set_tests_properties(server_network PROPERTIES
     ENVIRONMENT "DRAGONGL_SERVER=$<TARGET_FILE:dragongl_server_it>;DRAGONGL_DATA=${DGL_ROOT}/data;ASAN_OPTIONS=detect_leaks=0;PYTHONDONTWRITEBYTECODE=1"
     TIMEOUT 900)
+
+# DragonGL+: the protocol extension on a real server (test_plus.py)
+add_test(NAME server_plus
+         COMMAND ${Python3_EXECUTABLE} -m unittest -v test_plus
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+set_tests_properties(server_plus PROPERTIES
+    ENVIRONMENT "DRAGONGL_SERVER=$<TARGET_FILE:dragongl_server_it>;DRAGONGL_DATA=${DGL_ROOT}/data;ASAN_OPTIONS=detect_leaks=0;PYTHONDONTWRITEBYTECODE=1"
+    TIMEOUT 900)

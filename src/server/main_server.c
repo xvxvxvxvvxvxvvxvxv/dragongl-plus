@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include "server_plus.h"
 #include "game.h"
 #include "wire.h"
 #include "server_conn.h"
@@ -77,6 +78,7 @@ static void flush_all_clients(Client *clients) {
 /*The character leaves the world: saved, out of the grid and of the floor
  * of the others, the slot free.*/
 static void client_leaves(Game *game, Client *c) {
+    plus_reset(game, c); /*DragonGL+*/
     if (c->authenticated) {
         social_client_gone(c, game);
         save_player_data(c);
@@ -380,6 +382,7 @@ static void run_server(int s_sock, int epoll_fd, Client *clients, Game *game) {
         while (tick_acc_ms >= TICK_MS) {
             uint64_t round_start_us = metrics_now_us();
             update_world(clients, game);
+            plus_sync_all(game); /*DragonGL+: what the round changed*/
             metrics_record(METRIC_TICK, metrics_now_us() - round_start_us);
             tick_acc_ms -= TICK_MS;
             if (game->total_turns % PERF_LOG_ROUNDS == 0) {

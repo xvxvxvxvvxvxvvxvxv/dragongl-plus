@@ -298,6 +298,20 @@ bool local_server_start(int port, const char *password, char *err, int err_len) 
     plat_mkdirs(state);
     snprintf(s_log, sizeof(s_log), "%s/server.log", dir);
     snprintf(s_stop_file, sizeof(s_stop_file), "%s/stop.request", dir);
+    /*A private server left over by a client that crashed still holds the
+     * world: ask it to save and quit (stop file), and wait for it.*/
+    char lock[1200];
+    snprintf(lock, sizeof(lock), "%s/server.lock", state);
+    if (plat_file_locked(lock)) {
+        FILE *sf = fopen(s_stop_file, "w");
+        if (sf) fclose(sf);
+        for (int i = 0; i < 100 && plat_file_locked(lock); i++) plat_sleep_ms(100);
+        if (plat_file_locked(lock)) {
+            remove(s_stop_file);
+            snprintf(err, (size_t)err_len, "Another solo server is still running on this world.");
+            return false;
+        }
+    }
     remove(s_stop_file);
     char port_s[16];
     snprintf(port_s, sizeof(port_s), "%d", port);

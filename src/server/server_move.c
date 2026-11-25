@@ -26,6 +26,7 @@
  * bleeding, tile events and traps.
  */
 
+#include "server_plus.h"
 #include "server_move.h"
 #include "item_effects.h"
 #include "ai.h"
@@ -155,6 +156,7 @@ static bool bump_into(Client *c, Floor *fl, int ent_id, int nx, int ny, Client *
                                 "buy <n>', 'identify' or 'cure'.",
                                 npc_shop_any(&game->pools, n)->shop_name);
             print_merchant_inventory(c, npc_shop_any(&game->pools, n));
+            plus_open_shop(game, c, n); /*DragonGL+: the shop window*/
             return true;
         }
         if (is_loot(n)) {

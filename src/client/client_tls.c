@@ -12,6 +12,7 @@
 #include "net.h"
 #include "protocol.h"
 #include "tls_common.h"
+#include "protocol_plus.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -208,7 +209,10 @@ ClientTls *client_tls_connect(int fd, const char *host, int port, const char *ex
     const unsigned char *alpn = NULL;
     unsigned int alpn_len = 0;
     SSL_get0_alpn_selected(t->ssl, &alpn, &alpn_len);
-    if (alpn_len + 1 != TLS_ALPN_LEN || memcmp(alpn, TLS_ALPN + 1, alpn_len) != 0) {
+    bool v5 = alpn_len + 1 == TLS_ALPN_LEN && memcmp(alpn, TLS_ALPN + 1, alpn_len) == 0;
+    bool plus = alpn_len == sizeof(TLS_ALPN_PLUS_NAME) - 1 &&
+                memcmp(alpn, TLS_ALPN_PLUS_NAME, alpn_len) == 0; /* DragonGL+ */
+    if (!v5 && !plus) {
         snprintf(why, why_len, "the server did not agree on protocol %d", PROTOCOL_VERSION);
         free_session(t);
         return NULL;

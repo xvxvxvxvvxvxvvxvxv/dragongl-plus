@@ -17,6 +17,7 @@
  * two axis distances (a diagonal step is one cell).
  */
 
+#include "server_plus.h"
 #include "spell_cast.h"
 
 #include "ai.h"
@@ -175,6 +176,10 @@ bool spell_affect_npc(Game *game, const SpellTemplate *sp, const SpellCaster *sc
     }
     if (e->kind == SPELL_KIND_DAMAGE) {
         n->hp -= o.damage;
+        if (o.damage > 0) { /*DragonGL+: the damage number over the creature*/
+            plus_broadcast_event(game, n->floor_id, GEV_HURT, caster ? caster->entity_id : 0,
+                                 n->entity_id, o.damage, n->x, n->y);
+        }
     }
     if (caster) {
         report(caster, sp, sc, n, &o, rounds);

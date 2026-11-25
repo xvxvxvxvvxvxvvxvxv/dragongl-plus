@@ -29,6 +29,9 @@
 /* The ALPN wire form of the protocol: length byte + "dragongl/<n>". */
 extern const unsigned char TLS_ALPN[];
 extern const unsigned int TLS_ALPN_LEN;
+/* DragonGL+: "dragongl-plus/5.1" then "dragongl/5" (protocol_plus.h). */
+extern const unsigned char TLS_ALPN_ALL[];
+extern const unsigned int TLS_ALPN_ALL_LEN;
 
 /* Fingerprint of a certificate, "SHA256:AB:CD:...". False on error. */
 bool tls_cert_fingerprint(X509 *cert, char *out, size_t cap);

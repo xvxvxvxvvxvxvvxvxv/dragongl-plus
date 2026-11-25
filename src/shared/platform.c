@@ -35,6 +35,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <poll.h>
+#include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <sys/random.h>
@@ -102,6 +103,18 @@ void plat_sock_close(int sock) {
 void plat_sock_set_nonblocking(int sock) {
     u_long mode = 1;
     ioctlsocket((SOCKET)sock, FIONBIO, &mode);
+}
+
+bool plat_file_locked(const char *path) {
+    HANDLE h = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    OVERLAPPED ov;
+    memset(&ov, 0, sizeof(ov));
+    bool locked = !LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &ov);
+    if (!locked) UnlockFileEx(h, 0, 1, 0, &ov);
+    CloseHandle(h);
+    return locked;
 }
 
 int plat_poll_read(int sock, int timeout_ms) {
@@ -244,6 +257,14 @@ void plat_sock_close(int sock) {
 void plat_sock_set_nonblocking(int sock) {
     int flags = fcntl(sock, F_GETFL, 0);
     fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+}
+
+bool plat_file_locked(const char *path) {
+    int fd = open(path, O_RDWR | O_CLOEXEC);
+    if (fd < 0) return false;
+    bool locked = flock(fd, LOCK_EX | LOCK_NB) != 0 && errno == EWOULDBLOCK;
+    close(fd); /*releases a lock taken here*/
+    return locked;
 }
 
 int plat_poll_read(int sock, int timeout_ms) {

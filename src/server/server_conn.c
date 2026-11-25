@@ -18,6 +18,7 @@
  */
 
 #include "server_conn.h"
+#include "protocol_plus.h"
 #include "auth.h"
 #include "net.h"
 #include "server_entities.h"
@@ -45,6 +46,7 @@ typedef struct {
     bool handshake_done;
     bool want_write; /* TLS can only progress once the socket is writable */
     bool tls_fatal;  /* a fatal TLS error: no close_notify may follow */
+    bool plus;       /* DragonGL+: the client negotiated the extension (protocol_plus.h) */
     char peer_ip[CONN_IP_MAX];
     long long opened_ms;
 
@@ -203,6 +205,8 @@ static int conn_handshake(int slot, Conn *c) {
             conn_mark_drop(slot, "no ALPN protocol (not a Dragon GL client)");
             return -1;
         }
+        c->plus = alpn_len == sizeof(TLS_ALPN_PLUS_NAME) - 1 &&
+                  memcmp(alpn, TLS_ALPN_PLUS_NAME, alpn_len) == 0;
         return 1;
     }
     int e = SSL_get_error(c->ssl, r);
@@ -614,5 +618,17 @@ void ipguard_login_succeeded(const char *ip) {
     IpRecord *r = ipguard_find(ip, false, 0);
     if (r) {
         r->failures = 0;
+    }
+}
+
+/* DragonGL+: the client of this socket speaks the protocol extension. */
+bool conn_sock_is_plus(int sock) {
+    int slot = conn_slot_for_sock(sock);
+    return slot >= 0 && g_conns[slot].open && g_conns[slot].plus;
+}
+
+void conn_set_plus(int slot, bool plus) {
+    if (slot >= 0 && slot < CONN_SLOTS) {
+        g_conns[slot].plus = plus;
     }
 }

@@ -22,6 +22,7 @@
  * halves around the login worker, refusals.
  */
 
+#include "server_plus.h"
 #include "server_login.h"
 #include "dragongl_config.h"
 #include "alignment.h"
@@ -444,6 +445,7 @@ static void new_character(Client *c, const MsgLogin *ml) {
 /*The character enters the world: welcome, state, map, the entities
  * around, its place on the grid. False if the client is already gone.*/
 static bool enter_world(Client *c, Game *game, bool loaded) {
+    plus_reset(game, c); /*DragonGL+: the first sync sends everything*/
     MsgWelcome mw;
     memset(&mw, 0, sizeof(mw));
     mw.entity_id = c->entity_id;

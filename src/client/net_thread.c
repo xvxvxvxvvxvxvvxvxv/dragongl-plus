@@ -39,6 +39,7 @@
 #include "platform.h"
 #include "protocol.h"
 #include "wire.h"
+#include "wire_plus.h"
 #include "net.h"
 
 static void fail(NetStatus st, const char *why) {
@@ -299,8 +300,106 @@ static void on_combat_event(const MsgCombatEvent *ev) {
     pthread_mutex_unlock(&g_state_mutex);
 }
 
+/* ------------------------------------------------------------------ */
+/* DragonGL+ extension (protocol_plus.h)                                */
+/* ------------------------------------------------------------------ */
+
+static void on_entity_info(const PlusEntityInfo *m) {
+    pthread_mutex_lock(&g_state_mutex);
+    for (int i = 0; i < CLIENT_MAX_ENTITIES; i++) {
+        Entity *e = &g_entities[i];
+        if (!e->active || e->id != m->entity_id) continue;
+        e->kind = m->kind;
+        if (e->is_tombstone) e->kind = KIND_TOMBSTONE;
+        e->archetype = m->archetype;
+        e->level = m->level;
+        e->race_id = m->race_id;
+        e->class_id = m->class_id;
+        e->look_seed = m->look_seed;
+        if (m->name[0]) copy_str(e->username, m->name, sizeof(e->username));
+        e->has_info = true;
+        break;
+    }
+    pthread_mutex_unlock(&g_state_mutex);
+}
+
+static bool handle_plus_frame(MsgType type, const uint8_t *p, size_t n) {
+    switch (type) {
+    case MSG_PLUS_ENTITY_INFO: {
+        PlusEntityInfo m;
+        if (!wire_get_plus_entity_info(p, n, &m)) return false;
+        on_entity_info(&m);
+        return true;
+    }
+    case MSG_PLUS_PLAYER_EXT: {
+        PlusPlayerExt m;
+        if (!wire_get_plus_player_ext(p, n, &m)) return false;
+        pthread_mutex_lock(&g_state_mutex);
+        g_my_xp_next = m.xp_next;
+        g_stat_points = m.stat_points;
+        g_max_floor = m.max_floor;
+        pthread_mutex_unlock(&g_state_mutex);
+        return true;
+    }
+    case MSG_PLUS_INVENTORY: {
+        static MsgInventory inv;
+        if (!wire_get_plus_inventory(p, n, &inv)) return false;
+        pthread_mutex_lock(&g_state_mutex);
+        g_inventory = inv;
+        g_inventory_version++;
+        push_simple(CEV_INV_CHANGED, inv.count, g_my_x, g_my_y);
+        pthread_mutex_unlock(&g_state_mutex);
+        return true;
+    }
+    case MSG_PLUS_SPELLBOOK: {
+        static MsgSpellbook book;
+        if (!wire_get_plus_spellbook(p, n, &book)) return false;
+        pthread_mutex_lock(&g_state_mutex);
+        g_spellbook = book;
+        g_spellbook_version++;
+        pthread_mutex_unlock(&g_state_mutex);
+        return true;
+    }
+    case MSG_PLUS_SHOP: {
+        static MsgShop shop;
+        if (!wire_get_plus_shop(p, n, &shop)) return false;
+        pthread_mutex_lock(&g_state_mutex);
+        bool was_open = g_shop.merchant_id != 0;
+        g_shop = shop;
+        g_shop_version++;
+        if (shop.merchant_id != 0 && !was_open) push_simple(CEV_SHOP_OPEN, shop.merchant_id, g_my_x, g_my_y);
+        if (shop.merchant_id == 0 && was_open) push_simple(CEV_SHOP_CLOSE, 0, g_my_x, g_my_y);
+        pthread_mutex_unlock(&g_state_mutex);
+        return true;
+    }
+    case MSG_PLUS_GAME_EVENT: {
+        ClientEvent e;
+        memset(&e, 0, sizeof(e));
+        if (!wire_get_plus_game_event(p, n, &e.ev)) return false;
+        e.kind = CEV_SERVER;
+        e.x = e.ev.x;
+        e.y = e.ev.y;
+        e.value = e.ev.value;
+        pthread_mutex_lock(&g_state_mutex);
+        if (e.ev.type == GEV_KILL)
+            for (int i = 0; i < CLIENT_MAX_ENTITIES; i++)
+                if (g_entities[i].active && g_entities[i].id == e.ev.dst_id && g_entities[i].id != g_my_entity_id) {
+                    g_entities[i].hp = 0;
+                    if (!g_entities[i].killed_at_ms) g_entities[i].killed_at_ms = plat_time_ms();
+                    break;
+                }
+        evq_push(&e);
+        pthread_mutex_unlock(&g_state_mutex);
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
 /*Decode and apply one frame. False = malformed payload.*/
 static bool handle_frame(MsgType type, const uint8_t *p, size_t n) {
+    if (type >= MSG_PLUS_ENTITY_INFO) return !client_classic() && handle_plus_frame(type, p, n);
     switch (type) {
     case MSG_WELCOME: {
         MsgWelcome w;
@@ -419,7 +518,9 @@ static long consume_frames(const uint8_t *buf, size_t len) {
             fail(NET_FAILED, why);
             return -1;
         }
-        uint32_t max = wire_server_payload_max(h.type);
+        uint32_t max = h.type >= MSG_PLUS_ENTITY_INFO
+                           ? (client_classic() ? 0 : wire_plus_server_payload_max(h.type))
+                           : wire_server_payload_max(h.type);
         if (max == 0 || h.length > max) {
             fail(NET_FAILED, "Protocol error (unexpected message) - disconnected.");
             return -1;
@@ -438,7 +539,7 @@ static long consume_frames(const uint8_t *buf, size_t len) {
 
 void *net_thread_loop(void *arg) {
     (void)arg;
-    static uint8_t rx[WIRE_HEADER_SIZE + WIRE_MAX_PAYLOAD];
+    static uint8_t rx[WIRE_HEADER_SIZE + WIRE_MAX_PAYLOAD + 2 * 16384];
     size_t rx_len = 0;
     s_last_floor = -1;
     while (g_running && !session_stop_requested()) {

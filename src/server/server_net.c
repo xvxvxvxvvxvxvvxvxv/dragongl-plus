@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "server_net.h"
+#include "server_plus.h"
 #include "item_effects.h"
 #include "server_internal.h"
 #include "server_conn.h"
@@ -268,6 +269,8 @@ void send_detailed_state(Game *game, Client *c) {
     if (wire_put_state(tx_frame(), &s)) {
         tx_send(c->sock);
     }
+    /*DragonGL+: inventory, spellbook, progress and shop, when they changed*/
+    plus_sync_client(game, c);
 }
 
 void broadcast_spell_vfx(Game *game, int sx, int sy, int tx, int ty, int vfx_type, float r, float g,
@@ -375,6 +378,7 @@ static void send_full_npc_state(const Game *game, int sock, const NPC *n) {
     if (wire_put_state(tx_frame(), &s)) {
         tx_send(sock);
     }
+    plus_send_npc_info(sock, n); /*DragonGL+: what the creature is*/
 }
 
 /*Full MsgState for a PLAYER (identity: username, is_player, hp/max_hp).
@@ -398,6 +402,7 @@ static void send_full_player_state(int sock, const Client *p) {
     if (wire_put_state(tx_frame(), &s)) {
         tx_send(sock);
     }
+    plus_send_player_info(sock, p); /*DragonGL+: race, class, level*/
 }
 
 /*One frame with u16 count + 12-byte records instead of one MSG_STATE per

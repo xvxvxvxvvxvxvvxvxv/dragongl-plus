@@ -87,10 +87,13 @@ add_executable(test_tls test_tls.c ${DG_SRCS}/shared/tls_common.c
 target_link_libraries(test_tls OpenSSL::SSL OpenSSL::Crypto)
 add_test(NAME tls COMMAND test_tls)
 
-# --- floating tome animation (shop bounds, random wander, rotation) ---
-add_executable(test_tome test_tome.c ${DG_SRCS}/client/client_tome.c)
-target_link_libraries(test_tome m)
-add_test(NAME tome COMMAND test_tome)
+# (DragonGL+: the floating-tome test exercises the upstream client's
+# client_tome.c; the DragonGL+ client keeps its own.)
+
+# --- DragonGL+: codec of the protocol extension (protocol_plus.h) ---
+add_executable(test_protocol_plus test_protocol_plus.c ${DG_SRCS}/shared/wire_plus.c
+    ${DG_SRCS}/shared/wire.c ${DG_SRCS}/shared/binio.c)
+add_test(NAME protocol_plus COMMAND test_protocol_plus)
 
 # (DragonGL+: the tests of the upstream Vulkan client -- command line,
 # HUD theme, VFX pools and GPU mesh generation -- are not built: the

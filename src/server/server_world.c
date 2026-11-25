@@ -32,6 +32,7 @@
  *   - Persistent AoE cloud updates
  */
 
+#include "server_plus.h"
 #include "server_world.h"
 #include "ground_journal.h"
 #include "item_effects.h"
@@ -251,6 +252,7 @@ void player_killed(Game *game, Client *c, const char *by) {
     clog_death(c->username, by, c->floor_id);
     server_log("DEATH", "%s was killed by %s on floor %d (%d,%d).", c->username, by, c->floor_id,
                c->x, c->y);
+    plus_event(c, GEV_PLAYER_DIED, 0, c->entity_id, 0, c->x, c->y); /*DragonGL+*/
     save_bones(game, c);
     player_respawn_town(game, c);
 }
@@ -259,6 +261,7 @@ void player_killed(Game *game, Client *c, const char *by) {
  * wakes up in town.*/
 void player_dies(Game *game, Client *c, const char *how) {
     server_log("DEATH", "%s %s.", c->username, how);
+    plus_event(c, GEV_PLAYER_DIED, 0, c->entity_id, 0, c->x, c->y); /*DragonGL+*/
     save_bones(game, c);
     player_respawn_town(game, c);
     send_text_to_client(

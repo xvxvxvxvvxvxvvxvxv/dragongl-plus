@@ -22,6 +22,7 @@
  * item names and wear, experience and levels, starting gear.
  */
 
+#include "server_plus.h"
 #include "inventory.h"
 #include "item_effects.h"
 #include "server_combat.h"
@@ -491,6 +492,7 @@ void check_level_up(Client *c) {
 
         send_text_to_client(c->sock, "[LEVEL] *** YOU HAVE RISEN TO LEVEL %d! ***", c->level);
         send_combat_event(c->sock, COMBAT_EV_LEVEL_UP, c->entity_id, c->level);
+        plus_event(c, GEV_LEVEL_UP, c->entity_id, c->entity_id, c->level, c->x, c->y); /*DragonGL+*/
         send_text_to_client(c->sock,
                             "[LEVEL] Maximum HP increased by %d (Total: %d). "
                             "Health and spell slots restored.",

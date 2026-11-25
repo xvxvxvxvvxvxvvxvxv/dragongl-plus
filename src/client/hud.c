@@ -120,7 +120,7 @@ static void item_tooltip(const InvItem *it, const char *hint) {
     if (it->light > 0) n += snprintf(body + n, sizeof(body) - (size_t)n, "Light radius ^3%d^0\n", it->light);
     if (it->max_durability > 0)
         n += snprintf(body + n, sizeof(body) - (size_t)n, "Durability %d/%d\n", it->durability, it->max_durability);
-    n += snprintf(body + n, sizeof(body) - (size_t)n, "Weight %.1f lb  -  Value %u gp\n", (double)it->weight, it->value);
+    n += snprintf(body + n, sizeof(body) - (size_t)n, "Weight %.1f kg  -  Value %u gp\n", (double)it->weight, it->value);
     if (!(it->flags & INVF_IDENTIFIED)) n += snprintf(body + n, sizeof(body) - (size_t)n, "^3Unidentified^0\n");
     if (it->flags & INVF_CURSED) n += snprintf(body + n, sizeof(body) - (size_t)n, "^1Cursed!^0\n");
     if (it->flags & INVF_ARTIFACT) n += snprintf(body + n, sizeof(body) - (size_t)n, "^8Legendary artifact^0\n");
@@ -498,7 +498,7 @@ static void draw_inventory(float x, float y) {
     /*weight & gold*/
     float wx = ex + 4 * (cs + 6) + 20, ww = w - (wx - x) - 24;
     char wl[64];
-    snprintf(wl, sizeof(wl), "%.1f / %.0f lb", (double)inv.weight_now, (double)inv.weight_max);
+    snprintf(wl, sizeof(wl), "%.1f / %.0f kg", (double)inv.weight_now, (double)inv.weight_max);
     float frac = inv.weight_max > 0 ? inv.weight_now / inv.weight_max : 0;
     ui_text(FONT_BODY, 14, wx, bey + 2, "Load", COL_TEXT_FAINT, ALIGN_LEFT);
     ui_bar(wx, bey + 22, ww, 14, frac, frac > 0.9f ? COL_RED : UIC(160, 140, 100, 255), UIC(90, 76, 50, 255), wl);
@@ -512,7 +512,7 @@ static const char *stat_names[6] = {"STR", "DEX", "CON", "INT", "WIS", "CHA"};
 static const char *stat_full[6] = {"Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"};
 static const char *stat_cmd[6] = {"str", "dex", "con", "int", "wis", "cha"};
 static const char *stat_help[6] = {
-    "Melee to-hit and damage, carrying capacity (15 lb per point).",
+    "Melee to-hit and damage, carrying capacity (5 kg per point).",
     "Finesse/ranged to-hit, armor class, disarming traps.",
     "Hit points gained per level, resistance to poison.",
     "Arcane magic (wizards), examining terrain and items.",
@@ -658,7 +658,8 @@ static const char *school_tag(const SpellEntry *s) {
     case 0: return "^1Damage^0";
     case 1: return "^2Healing^0";
     case 2: return "^4Buff^0";
-    default: return "^5Hex^0";
+    case 3: return "^5Hex^0";
+    default: return "^6Utility^0";
     }
 }
 

@@ -93,6 +93,10 @@ void conn_close(int slot);
 bool conn_is_open(int slot);
 int conn_fd(int slot);
 int conn_slot_for_sock(int sock); /* -1 if the socket belongs to no live slot */
+/* DragonGL+: the client of sock negotiated the protocol extension
+ * (protocol_plus.h); conn_set_plus marks a test slot. */
+bool conn_sock_is_plus(int sock);
+void conn_set_plus(int slot, bool plus);
 const char *conn_peer_ip(int slot);
 long long conn_opened_ms(int slot);
 

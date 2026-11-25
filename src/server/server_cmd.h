@@ -50,6 +50,9 @@ typedef struct {
 
 /*Runs the first matching entry whose handler accepts the command; true if
  * one did.*/
+/*DragonGL+: what the player pays for the item on shelf of m (cmd_shop.c).*/
+uint64_t shop_buy_price(const MerchantData *m, int shelf, float multiplier);
+
 bool cmd_table_run(const CmdEntry *table, size_t n, Client *c, const char *cmd, Game *game);
 
 /*The first entry of the table whose command word is the first word of cmd
