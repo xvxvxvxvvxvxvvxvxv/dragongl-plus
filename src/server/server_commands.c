@@ -1929,6 +1929,22 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
               npcs[i].archetype = ARCH_TREASURE;
               npcs[i].template_idx = iid; // Store item ID here for chests
               npcs[i].hp = npcs[i].max_hp = 1;
+              /*Opening a chest hands over ghost_loot[0] (an empty one
+               * rolls random loot instead), so put the item there, like a
+               * dropped item; a reused slot may still hold the loot, gold
+               * or ghost flag of a previous chest or ghost.*/
+              npcs[i].is_ghost = false;
+              npcs[i].gold_drop = 0;
+              memset(npcs[i].ghost_loot, 0, sizeof(npcs[i].ghost_loot));
+              ItemInstance *loot = &npcs[i].ghost_loot[0];
+              const ItemTemplate *lt = &item_database[iid];
+              loot->template_idx  = iid;
+              loot->durability    = (lt->category == ITEM_LIGHT_SOURCE && strcasestr(lt->name, "lantern")) ? 5000 : lt->max_durability;
+              loot->stack_count   = 1;
+              loot->is_identified = true;
+              loot->quality       = QUALITY_NORMAL;
+              loot->blessing      = BLESS_NORMAL;
+              loot->element       = ELEM_NONE;
               /*Activate after floor_id/archetype are final (A2). Note the
                *slot's template is untouched (a reused corpse may keep its
                *own): the helper applies the same counted/not-counted rule
