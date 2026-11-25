@@ -14,12 +14,12 @@ if(DRAGONGL_USE_CLANG AND NOT DEFINED CMAKE_C_COMPILER AND NOT DEFINED ENV{CC}
         set(CMAKE_C_COMPILER clang)
     endif()
 endif()
-if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Windows")
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/DragonGL.cmake")
+project(DragonGL VERSION ${DRAGONGL_VERSION} LANGUAGES C)
+if(WIN32)
     # -z relro/now and PIE are ELF options
     set(DRAGONGL_HARDENING OFF CACHE BOOL "Add hardening flags (off for distribution builds)" FORCE)
 endif()
-include("${CMAKE_CURRENT_LIST_DIR}/cmake/DragonGL.cmake")
-project(DragonGL VERSION ${DRAGONGL_VERSION} LANGUAGES C)
 
 # What to build. A headless server host needs neither Vulkan headers nor
 # GLFW: -DDRAGONGL_BUILD_CLIENT=OFF.
@@ -49,15 +49,32 @@ if(WIN32)
     # The code base speaks POSIX: on Windows every translation unit of the
     # game gets the compatibility layer first (sockets, files, locks...),
     # applied per target so third-party libraries build as their authors
-    # intend.
+    # intend. src/shared/compat_win32 stands in for the POSIX headers
+    # Windows lacks; platform_win32.h maps the calls (wepoll for epoll).
     set(DRAGONGL_FORCE_INCLUDE -include ${CMAKE_CURRENT_SOURCE_DIR}/src/shared/platform.h)
+    include_directories(src/shared/compat_win32 third_party/wepoll)
+    set(DRAGONGL_WIN32_SRCS src/shared/platform_win32.c third_party/wepoll/wepoll.c)
+    # These call Winsock and the CRT directly: no POSIX macros.
+    set_source_files_properties(src/shared/platform.c src/shared/platform_win32.c
+        third_party/miniaudio/miniaudio.c third_party/volk/volk.c
+        PROPERTIES COMPILE_DEFINITIONS DRAGONGL_NO_POSIX_SHIM)
+    set_source_files_properties(third_party/wepoll/wepoll.c PROPERTIES
+        COMPILE_DEFINITIONS "DRAGONGL_NO_POSIX_SHIM;DRAGONGL_WEPOLL_SOURCE" COMPILE_OPTIONS "-w")
     add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0601 _USE_MATH_DEFINES)
     if(DRAGONGL_PORTABLE OR MINGW)
         add_link_options(-static -static-libgcc)
     endif()
 endif()
+# Static OpenSSL and libsodium of the portable packages, built by
+# tools/build_deps.sh into this prefix (lib/, include/, lib/pkgconfig/).
+set(DRAGONGL_DEPS_PREFIX "" CACHE PATH "Prefix of the static OpenSSL and libsodium (tools/build_deps.sh)")
+if(DRAGONGL_DEPS_PREFIX)
+    list(APPEND CMAKE_FIND_ROOT_PATH "${DRAGONGL_DEPS_PREFIX}")
+    set(OPENSSL_ROOT_DIR "${DRAGONGL_DEPS_PREFIX}")
+    set(ENV{PKG_CONFIG_LIBDIR} "${DRAGONGL_DEPS_PREFIX}/lib/pkgconfig")
+    set(ENV{PKG_CONFIG_PATH} "")
+endif()
 if(DRAGONGL_PORTABLE)
-    # The static OpenSSL of the release toolchain (tools/build_release.sh)
     set(OPENSSL_USE_STATIC_LIBS ON)
 endif()
 
@@ -68,10 +85,10 @@ find_package(PkgConfig REQUIRED)
 find_package(OpenSSL 3.0 REQUIRED)
 if(DRAGONGL_BUILD_SERVER)
     # libsodium: Argon2id password hashing and constant-time comparisons
-    if(DRAGONGL_PORTABLE)
-        pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET --static libsodium)
-    else()
-        pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
+    # (with DRAGONGL_DEPS_PREFIX only the static library is there)
+    pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
+    if(WIN32 AND DRAGONGL_DEPS_PREFIX)
+        add_compile_definitions(SODIUM_STATIC) # no dllimport in sodium.h
     endif()
 endif()
 
@@ -80,7 +97,7 @@ include_directories(include src/shared "${DRAGONGL_GENERATED_DIR}")
 # --- Targets ----------------------------------------------------------------------
 set(COMMON_LIBS Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 if(WIN32)
-    list(APPEND COMMON_LIBS ws2_32 crypt32 bcrypt advapi32 shell32 user32)
+    list(APPEND COMMON_LIBS ws2_32 crypt32 gdi32 bcrypt advapi32 shell32 user32)
 else()
     list(APPEND COMMON_LIBS m)
 endif()
@@ -90,11 +107,7 @@ list(APPEND DRAGONGL_SHARED_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/src/shared/platfor
 list(APPEND DRAGONGL_CLIENT_SHARED_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/src/shared/platform.c")
 
 if(DRAGONGL_BUILD_SERVER)
-    set(DRAGONGL_SERVER_EXTRA "")
-    if(WIN32)
-        list(APPEND DRAGONGL_SERVER_EXTRA third_party/wepoll/wepoll.c)
-        set_source_files_properties(third_party/wepoll/wepoll.c PROPERTIES COMPILE_OPTIONS "-w")
-    endif()
+    set(DRAGONGL_SERVER_EXTRA ${DRAGONGL_WIN32_SRCS})
     add_executable(dragongl_server ${DRAGONGL_SERVER_SRCS} ${DRAGONGL_SHARED_SRCS} ${DRAGONGL_SERVER_EXTRA})
     target_include_directories(dragongl_server PRIVATE src/server third_party/wepoll)
     target_link_libraries(dragongl_server ${COMMON_LIBS} PkgConfig::SODIUM ${DRAGONGL_CJSON_LIBS})
@@ -201,7 +214,8 @@ if(DRAGONGL_BUILD_CLIENT)
         enable_language(RC)
         list(APPEND CLIENT_SRCS res/dragongl.rc)
     endif()
-    add_executable(dragongl_client ${CLIENT_SRCS} ${DRAGONGL_CLIENT_SHARED_SRCS} ${EMBED_SRCS})
+    add_executable(dragongl_client ${CLIENT_SRCS} ${DRAGONGL_CLIENT_SHARED_SRCS} ${EMBED_SRCS}
+        ${DRAGONGL_WIN32_SRCS})
     target_include_directories(dragongl_client PRIVATE
         src/client
         ${GLFW_INC}

@@ -44,6 +44,10 @@
 #  ifndef NOMINMAX
 #    define NOMINMAX
 #  endif
+/*no GDI: its Polygon() clashes with the map generator's type*/
+#  ifndef NOGDI
+#    define NOGDI
+#  endif
 /*winsock2.h MUST precede windows.h (otherwise the legacy winsock.h is
  * pulled in and the two clash).*/
 #  include <winsock2.h>
@@ -81,6 +85,10 @@ char *strcasestr(const char *haystack, const char *needle);
 #    define strtok_r(s, d, p) strtok_s((s), (d), (p))
 #  endif
 #  define MSG_NOSIGNAL 0
+/*The POSIX calls of the server (sockets, epoll, eventfd, flock...)*/
+#  ifndef DRAGONGL_WEPOLL_SOURCE /*wepoll.c carries its own header*/
+#    include "platform_win32.h"
+#  endif
 #else
 #  include <unistd.h>
 #  include <sys/types.h>
