@@ -4567,7 +4567,7 @@
             "rarity": "RARE",
             "classification": "",
             "ac": "",
-            "damage": "",
+            "damage": "1d6",
             "damage_type": "",
             "properties": "",
             "cost": "700000"
@@ -4645,7 +4645,7 @@
             "rarity": "RARE",
             "classification": "",
             "ac": "",
-            "damage": "",
+            "damage": "1d6",
             "damage_type": "",
             "properties": "requires attunement",
             "cost": "800000"
@@ -4658,7 +4658,7 @@
             "rarity": "RARE",
             "classification": "",
             "ac": "",
-            "damage": "",
+            "damage": "1d6",
             "damage_type": "",
             "properties": "requires attunement",
             "cost": "800000"
@@ -4671,7 +4671,7 @@
             "rarity": "VERY_RARE",
             "classification": "",
             "ac": "",
-            "damage": "",
+            "damage": "1d8",
             "damage_type": "",
             "properties": "requires attunement",
             "cost": "800000"
@@ -4970,7 +4970,7 @@
             "rarity": "RARE",
             "classification": "",
             "ac": "",
-            "damage": "",
+            "damage": "1d8",
             "damage_type": "",
             "properties": "requires attunement",
             "cost": "1200000"
