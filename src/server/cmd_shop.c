@@ -313,8 +313,9 @@ static float haggle_roll(Client *c, bool buying) {
     int p_roll = rules_roll_dice(1, 20);
     int m_roll = rules_roll_dice(1, 20) + 2 + impatience;
     int p_total = p_roll + rules_get_modifier(c->cha);
-    send_text_to_client(c->sock, "> Your Roll: %d + %d = %d", p_roll, rules_get_modifier(c->cha),
-                        p_total);
+    int cha_mod = rules_get_modifier(c->cha); /*DragonGL+: "7 - 2", not "7 + -2"*/
+    send_text_to_client(c->sock, "> Your Roll: %d %c %d = %d", p_roll, cha_mod < 0 ? '-' : '+',
+                        abs(cha_mod), p_total);
     send_text_to_client(c->sock, "> Merchant Roll: %d (Impatience: +%d)", m_roll - impatience,
                         impatience);
     if (p_roll == 20) {

@@ -579,7 +579,14 @@ void plus_sync_client(Game *game, Client *c) {
 
 void plus_sync_all(Game *game) {
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        plus_sync_client(game, &game->clients[i]);
+        Client *c = &game->clients[i];
+        plus_sync_client(game, c);
+        /*Creatures move between the player's steps: a DragonGL+ client gets
+         * their positions every round (12-byte records), so they walk
+         * instead of jumping when the player moves next.*/
+        if (plus_client(c)) {
+            broadcast_nearby_entities(c, game);
+        }
     }
 }
 

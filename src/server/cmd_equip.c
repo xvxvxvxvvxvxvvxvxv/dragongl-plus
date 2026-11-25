@@ -61,6 +61,27 @@ static ItemInstance *wear_slot(Client *c, ItemCategory category) {
     }
 }
 
+/*DragonGL+: a new character starts with the gear of its class worn
+ * (weapon, shield, armour...), not in the backpack. Only empty slots are
+ * filled, in the order the gear was given (the weapon first: right hand).*/
+void equip_starting_gear(Client *c) {
+    int i = 0;
+    while (i < c->backpack_count) {
+        const ItemInstance *it = &c->backpack[i];
+        if (it->template_idx < 0 || it->template_idx >= item_database_size) {
+            i++;
+            continue;
+        }
+        ItemInstance *slot = wear_slot(c, item_database[it->template_idx].category);
+        if (!slot || slot->template_idx != -1) {
+            i++;
+            continue;
+        }
+        *slot = *it;
+        backpack_take_swap_last(c, i); /*the last item moves to i: look at it next*/
+    }
+}
+
 /*Wearing an unidentified item reveals it; a cursed one is then stuck.*/
 static void wear_announce(Client *c, ItemInstance *worn, const ItemTemplate *it) {
     if (worn->is_identified) {

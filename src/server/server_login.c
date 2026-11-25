@@ -22,6 +22,7 @@
  * halves around the login worker, refusals.
  */
 
+#include "server_cmd.h"
 #include "server_plus.h"
 #include "server_login.h"
 #include "dragongl_config.h"
@@ -440,6 +441,7 @@ static void new_character(Client *c, const MsgLogin *ml) {
     c->max_hp = c->hp;
     starting_spell_slots(c);
     give_starting_gear(c);
+    equip_starting_gear(c); /*DragonGL+*/
 }
 
 /*The character enters the world: welcome, state, map, the entities

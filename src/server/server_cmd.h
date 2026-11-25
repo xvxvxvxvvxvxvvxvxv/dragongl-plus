@@ -50,6 +50,8 @@ typedef struct {
 
 /*Runs the first matching entry whose handler accepts the command; true if
  * one did.*/
+/*DragonGL+: a new character wears the gear of its class (cmd_equip.c).*/
+void equip_starting_gear(Client *c);
 /*DragonGL+: what the player pays for the item on shelf of m (cmd_shop.c).*/
 uint64_t shop_buy_price(const MerchantData *m, int shelf, float multiplier);
 
