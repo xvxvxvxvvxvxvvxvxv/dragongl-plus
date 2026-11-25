@@ -1,3 +1,13 @@
+* Wed Nov 25 2026 DragonGL+ - 2026.11.25.01
+- ITEMS: the Mace of Smiting, Mace of Disruption, Mace of Terror, Nine
+  Lives Stealer and Sun Blade deal 1d6 (maces) or 1d8 (swords) damage;
+  they had no damage dice, listed "0d0 dmg" and only hit for the
+  Strength modifier.
+- SHOPS: the Net, the Blowgun and ammunition show "-" instead of
+  "0d0 dmg" in the shop list.
+- COMMANDS: the chest placed by dm_place holds the chosen item (it gave
+  random loot); dm_spawn_boss no longer says "Boss Boss <name>" and
+  rejects floors past 100 clearly; the DM help lists dm_merchant.
 * Tue Nov 24 2026 DragonGL+ - 2026.11.24.01
 - SHOPS: "identify <name>" with a name that matched no unknown item
   identified (and charged 100gp for) the last unknown item in the
