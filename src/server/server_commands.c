@@ -606,6 +606,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         send_text_to_client(c->sock, "dm_level <lvl> : Increase level up to lvl (max 20)");
         send_text_to_client(c->sock, "dm_telemetry : Show server metrics (RAM/CPU)");
         send_text_to_client(c->sock, "dm_boss <floor> : Locate bosses on the indicated floor (stats+loot)");
+        send_text_to_client(c->sock, "dm_merchant <floor> : Locate the wandering merchant of a floor");
     }
     return;
   }
@@ -1465,6 +1466,12 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
         send_text_to_client(c->sock, "[DM] Use: dm_spawn_boss <floor> (ex: dm_spawn_boss 10)");
         return;
       }
+      if (target_floor >= MAX_FLOORS) {
+        send_text_to_client(c->sock,
+          "[DM] Floor %d does not exist: the deepest floor is %d.",
+          target_floor, MAX_FLOORS - 1);
+        return;
+      }
       
       extern int next_id;
       int empty_idx = -1;
@@ -1490,7 +1497,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       }
       
       if (psize == 0) {
-        send_text_to_client(c->sock, "[DM] ERROR: No monsters in the bestiary are suitable for the %d floor.", target_floor);
+        send_text_to_client(c->sock, "[DM] ERROR: No monsters in the bestiary are suitable for floor %d.", target_floor);
         return;
       }
       
@@ -1515,7 +1522,7 @@ void handle_text_cmd(Client *c, const char *cmd, NPC *npcs) {
       ai_init_npc(b, b->custom_name, b->floor_id);
       npc_set_active(b, true);
       
-      send_text_to_client(c->sock, "[DM] Boss %s (Entity %d) successfully spawned on floor %d!", b->custom_name, b->entity_id, target_floor);
+      send_text_to_client(c->sock, "[DM] %s (Entity %d) successfully spawned on floor %d!", b->custom_name, b->entity_id, target_floor);
       return;
     }
 
