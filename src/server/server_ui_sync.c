@@ -334,7 +334,9 @@ static void build_shop(const NPC *merchant, MsgShop *m) {
         char stats[32] = "";
         switch (it->category) {
         case ITEM_WEAPON: type = "Weapon";
-            snprintf(stats, sizeof(stats), "%dd%d dmg", it->damage_dice_count, it->damage_dice_sides); break;
+            if (it->damage_dice_count > 0)
+                snprintf(stats, sizeof(stats), "%dd%d dmg", it->damage_dice_count, it->damage_dice_sides);
+            break;
         case ITEM_ARMOR: type = "Armor"; snprintf(stats, sizeof(stats), "AC %d", it->ac_base); break;
         case ITEM_SHIELD: type = "Shield"; snprintf(stats, sizeof(stats), "+%d AC", it->ac_bonus); break;
         case ITEM_HEAD: type = "Helm"; if (it->ac_bonus) snprintf(stats, sizeof(stats), "+%d AC", it->ac_bonus); break;
