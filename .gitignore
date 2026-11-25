@@ -56,3 +56,4 @@ build-linux/
 build-windows/
 !shaders/spv/*.spv
 downloads/
+!shaders/spv/SOURCES.sha256
