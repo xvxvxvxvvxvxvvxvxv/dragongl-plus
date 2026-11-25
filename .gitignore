@@ -55,3 +55,4 @@ map_floor*.pdf
 build-linux/
 build-windows/
 !shaders/spv/*.spv
+downloads/
