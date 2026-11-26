@@ -21,12 +21,51 @@
 #define SERVER_WORLD_H
 
 #include "server_entities.h"
-#include "../../include/net.h"
+#include "net.h"
 
-void update_world(Client *clients, NPC *npcs);
+/*Every ware of the shop back to its full stock; the next restock in
+ * MERCHANT_RESTOCK_ROUNDS rounds.*/
+void merchant_restock(MerchantData *shop);
+
+/*A character at 0 HP: logged ("<name> <how>."), his bones saved, back to
+ * town without his equipment.*/
+void player_dies(Game *game, Client *c, const char *how);
+/*A death by a blow, a spell or a trap (by: what killed): the combat log
+ * and the server log record it, the bones stay, the character wakes up in
+ * town. The caller tells the player.*/
+void player_killed(Game *game, Client *c, const char *by);
+
+/*Hour and minute of the game day (1 round = 1 game minute).*/
+void get_game_time(Game *game, int *h, int *m);
+
+/*One round of the game: the players, every NPC, the world event, the
+ * clouds. The main loop calls it on its fixed-step clock (TICK_MS).*/
+void update_world(Client *clients, Game *game);
+/*Save world.dat + npcs.dat to the state directory (false on failure).*/
+bool save_world_state(Game *game);
+
+/*The autosave, cut into AUTOSAVE_STEPS parts that run in consecutive
+ * rounds so that no round carries all of it: step 0 the characters and
+ * the world, step 1 the NPC table. Each part is serialized on the game
+ * thread and written by the writer thread. world.dat and npcs.dat are
+ * then one round apart, as they already were two separate writes.*/
+#define AUTOSAVE_STEPS 2
+bool autosave_step(Client *clients, Game *game, int step);
+/*The autosave of the world runs every that many seconds of the clock (60).
+ * 0: never by the clock. A run that saves by its rounds (the campaign,
+ * autosave_step) turns it off: an autosave at a time of the clock would
+ * fall on a round that depends on the speed of the machine, and a crash
+ * would then take the world back to a different save.*/
+void autosave_set_period(int seconds);
 
 /* Floor Stats Cache — incremental O(1) updates */
-void floor_stats_rebuild(NPC *npcs);
+void floor_stats_rebuild(Game *game);
+/*Counters of one floor (rebuilding the cache when stale); false when the
+ * floor is out of range.*/
+bool floor_stats_get(Game *game, int floor_id, int *total, int *active);
+/*Living swarm clones of a floor (ai_swarm_behavior): they are not in the
+ * counts of floor_stats_get(), which are of the creatures that respawn.*/
+int floor_swarm_clones(Game *game, int floor_id);
 void floor_stats_npc_died(int floor_id);
 void floor_stats_npc_spawned(int floor_id);
 
@@ -36,22 +75,56 @@ void floor_stats_npc_spawned(int floor_id);
  * accounting as floor_stats_rebuild() — merchants are excluded, slots
  * without a template (gold piles, chests, dropped items, summons) and
  * out-of-range floors are ignored — so the cache can never drift.
- * Use it at EVERY spawn/death site instead of writing n->active by hand:
- * the old code had 20+ hand-written mutations of which only a handful
- * called floor_stats_npc_died/spawned, so AoE kills, DM spawns, drops,
- * summons and ghosts all left the cache stale (floors looked fuller than
- * they were, and emergency respawns fired late).*/
-void npc_set_active(NPC *n, bool active);
+ * It also adds a newly active NPC to the per-floor index. Use it at EVERY
+ * spawn/death site, never write n->active by hand, and set the final
+ * fields (floor, template, archetype) first.*/
+void npc_set_active(Game *game, NPC *n, bool active);
+
+/*A slot for a new NPC: one that never held a creature or holds the
+ * remains of an item, else the slot of a dead monster (which will then
+ * not respawn). NULL when every slot is alive. The caller fills the
+ * fields and activates it with npc_set_active().*/
+NPC *npc_alloc(Game *game);
+/*The same, without the last resort: a free slot or NULL, never the slot
+ * of a dead monster waiting for its respawn. For what is not worth a
+ * monster of the world (a swarm clone).*/
+NPC *npc_alloc_free(Game *game);
+
+/*An item lying on the ground at (x, y): the NPC that carries it (archetype
+ * ARCH_TREASURE, registered on the entity grid), or NULL without a slot.*/
+NPC *npc_spawn_item(Game *game, int floor_id, int x, int y, const ItemInstance *item);
+/*A pile of gold on a free tile (a boss's bounty); NULL if no NPC slot.*/
+NPC *npc_spawn_gold(Game *game, int floor_id, int x, int y, uint64_t gold);
 
 /* Per-floor index of active NPCs — local queries (broadcast on a step,
  * aggro on an attack, swarm splits) iterate O(entities on the floor)
  * instead of scanning all MAX_NPCS (50k) slots.
- * Rebuilt once per world tick (and at startup); entries that go stale
- * between ticks (fresh spawn, fresh death) are validated by the
- * consumer, so staleness costs a few extra checks at most. When a
- * floor would overflow the index, floor_index_for() returns NULL and
- * the caller falls back to the legacy full scan.*/
-void floor_index_rebuild(const NPC *npcs);
+ * Rebuilt once per world tick (and at startup); npc_set_active() adds
+ * the NPCs that become active in between, and a dead NPC keeps its entry
+ * until the rebuild (consumers check it). When a floor would overflow the
+ * index, floor_index_for() returns NULL and the caller scans every slot.
+ * Use floor_iter() below rather than the raw index.*/
+void floor_index_rebuild(Game *game);
 const int *floor_index_for(int floor_id, int *count_out);
+
+/* Walk of the active NPCs of one floor, through the per-floor index (every
+ * slot when the floor overflowed it): the same slots, in the same
+ * increasing order, as a scan of all MAX_NPCS slots that keeps the active
+ * NPCs of that floor, including NPCs activated during the walk.
+ *   FloorIter it = floor_iter(npcs, f);
+ *   for (int i; (i = floor_iter_next(&it)) >= 0;) use(&npcs[i]);        */
+typedef struct {
+    const NPC *npcs;
+    int floor_id;
+    int last; /*slot returned last, -1 before the first*/
+} FloorIter;
+FloorIter floor_iter(Game *game, int floor_id);
+int floor_iter_next(FloorIter *it);
+
+/* The active NPC with this entity id, or NULL. O(1) through a map rebuilt
+ * with the floor index, to which npc_set_active() adds an NPC when it
+ * activates it: an NPC made active in any other way is found from the next
+ * floor_index_rebuild() on. */
+NPC *npc_by_entity_id(Game *game, int entity_id);
 
 #endif // SERVER_WORLD_H

@@ -120,7 +120,7 @@ static void item_tooltip(const InvItem *it, const char *hint) {
     if (it->light > 0) n += snprintf(body + n, sizeof(body) - (size_t)n, "Light radius ^3%d^0\n", it->light);
     if (it->max_durability > 0)
         n += snprintf(body + n, sizeof(body) - (size_t)n, "Durability %d/%d\n", it->durability, it->max_durability);
-    n += snprintf(body + n, sizeof(body) - (size_t)n, "Weight %.1f lb  -  Value %u gp\n", (double)it->weight, it->value);
+    n += snprintf(body + n, sizeof(body) - (size_t)n, "Weight %.1f kg  -  Value %u gp\n", (double)it->weight, it->value);
     if (!(it->flags & INVF_IDENTIFIED)) n += snprintf(body + n, sizeof(body) - (size_t)n, "^3Unidentified^0\n");
     if (it->flags & INVF_CURSED) n += snprintf(body + n, sizeof(body) - (size_t)n, "^1Cursed!^0\n");
     if (it->flags & INVF_ARTIFACT) n += snprintf(body + n, sizeof(body) - (size_t)n, "^8Legendary artifact^0\n");
@@ -270,10 +270,10 @@ static void handle_event(const ClientEvent *e) {
     case CEV_WELCOME: {
         char t[96];
         snprintf(t, sizeof(t), e->value ? "Welcome, %s" : "Welcome back, %s", g_my_name);
-        show_banner(t, client_classic() ? "Classic Dragon GL server - compatibility mode"
+        show_banner(t, client_classic() ? "Dragon GL server - compatibility mode"
                                         : (e->value ? "Your adventure begins in the Dragon's Maw Village" : "The Maw awaits your return"));
         if (client_classic())
-            client_log_add_color("[SYSTEM] Connected to a classic Dragon GL server: inventory, shops and spells work through "
+            client_log_add_color("[SYSTEM] Connected to a Dragon GL server (compatibility mode): inventory, shops and spells work through "
                                  "chat commands (type 'help'); creatures are shown without names.",
                                  UIC(255, 200, 120, 255));
         tip(0, "Move with WASD (or click the ground). Hold the right mouse button to turn the camera.");
@@ -310,12 +310,12 @@ void hud_handle_events(void) {
 /* ------------------------------------------------------------------ */
 
 void hud_toggle(uint32_t w) {
-    /*Classic servers send no inventory/spellbook data: ask for the text
+    /*A Dragon GL server sends no inventory/spellbook data: ask for the text
      * listing instead (it appears in the chat).*/
     if (client_classic() && (w == WIN_INVENTORY || w == WIN_SPELLS)) {
         app_send(w == WIN_INVENTORY ? "inventory" : "spells");
-        ui_toast(w == WIN_INVENTORY ? "Classic server: inventory listed in the chat ('use <n>', 'wear <n>', 'drop <n>')."
-                                    : "Classic server: spells listed in the chat ('cast <name>').",
+        ui_toast(w == WIN_INVENTORY ? "Dragon GL server: inventory listed in the chat ('use <n>', 'wear <n>', 'drop <n>')."
+                                    : "Dragon GL server: spells listed in the chat ('cast <name>').",
                  COL_TEXT);
         return;
     }
@@ -498,7 +498,7 @@ static void draw_inventory(float x, float y) {
     /*weight & gold*/
     float wx = ex + 4 * (cs + 6) + 20, ww = w - (wx - x) - 24;
     char wl[64];
-    snprintf(wl, sizeof(wl), "%.1f / %.0f lb", (double)inv.weight_now, (double)inv.weight_max);
+    snprintf(wl, sizeof(wl), "%.1f / %.0f kg", (double)inv.weight_now, (double)inv.weight_max);
     float frac = inv.weight_max > 0 ? inv.weight_now / inv.weight_max : 0;
     ui_text(FONT_BODY, 14, wx, bey + 2, "Load", COL_TEXT_FAINT, ALIGN_LEFT);
     ui_bar(wx, bey + 22, ww, 14, frac, frac > 0.9f ? COL_RED : UIC(160, 140, 100, 255), UIC(90, 76, 50, 255), wl);
@@ -512,7 +512,7 @@ static const char *stat_names[6] = {"STR", "DEX", "CON", "INT", "WIS", "CHA"};
 static const char *stat_full[6] = {"Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"};
 static const char *stat_cmd[6] = {"str", "dex", "con", "int", "wis", "cha"};
 static const char *stat_help[6] = {
-    "Melee to-hit and damage, carrying capacity (15 lb per point).",
+    "Melee to-hit and damage, carrying capacity (5 kg per point).",
     "Finesse/ranged to-hit, armor class, disarming traps.",
     "Hit points gained per level, resistance to poison.",
     "Arcane magic (wizards), examining terrain and items.",
@@ -642,7 +642,7 @@ void hud_cast_hotbar(int i) {
 
 void hud_use_belt(int i) {
     if (client_classic()) {
-        ui_toast("Classic server: use potions with 'use <n>' in the chat (see 'inventory').", COL_TEXT_DIM);
+        ui_toast("Dragon GL server: use potions with 'use <n>' in the chat (see 'inventory').", COL_TEXT_DIM);
         return;
     }
     const InvItem *it = inv_find(INV_BELT, i);
@@ -658,7 +658,8 @@ static const char *school_tag(const SpellEntry *s) {
     case 0: return "^1Damage^0";
     case 1: return "^2Healing^0";
     case 2: return "^4Buff^0";
-    default: return "^5Hex^0";
+    case 3: return "^5Hex^0";
+    default: return "^6Utility^0";
     }
 }
 
@@ -1458,7 +1459,7 @@ static void draw_target_frame(void) {
     if (l->level > 0)
         snprintf(buf, sizeof(buf), "Lv %d  %s", l->level, (l->archetype >= 0 && l->archetype < 10) ? arch[l->archetype] : "");
     else
-        buf[0] = '\0'; /*classic servers send no level or role*/
+        buf[0] = '\0'; /*a Dragon GL server sends no level or role*/
     ui_text(FONT_BODY, 14, x + w - 14, y + 9, buf, COL_TEXT_DIM, ALIGN_RIGHT);
     snprintf(buf, sizeof(buf), "%d / %d", l->hp, l->max_hp);
     ui_bar(x + 14, y + 32, w - 28, 16, l->hp_frac, UIC(230, 60, 50, 255), UIC(120, 20, 20, 255), buf);

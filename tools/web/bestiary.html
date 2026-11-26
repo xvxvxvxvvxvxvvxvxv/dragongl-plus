@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Dragon GL - Copyright (C) 2026 Nicola Taibi - SPDX-License-Identifier: GPL-3.0-or-later -->
 <!--
   DRAGONGL · DATA STUDIO — generated standalone editor
   Assembled by build.py from: _design.css + _core.js + module config.
@@ -10,6 +11,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bestiary · Dragongl Data Studio</title>
 <style>
+/* Dragon GL - Copyright (C) 2026 Nicola Taibi
+   SPDX-License-Identifier: GPL-3.0-or-later */
 /* ============================================================
    DRAGONGL · DATA STUDIO — shared design system
    Dark-fantasy professional UI. One accent per module page
@@ -345,6 +348,7 @@ kbd{padding:2px 7px}
   padding-right:28px;
 }
 .fg textarea{min-height:104px;resize:vertical;line-height:1.55}
+.fg textarea.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.45;min-height:180px}
 .fg input:focus,.fg select:focus,.fg textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .fg input::placeholder,.fg textarea::placeholder{color:var(--dim)}
 .fhint{font:500 11px var(--font-ui);color:var(--dim)}
@@ -612,6 +616,8 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 </div>
 
 <script>
+/* Dragon GL - Copyright (C) 2026 Nicola Taibi
+   SPDX-License-Identifier: GPL-3.0-or-later */
 /* ============================================================
    DRAGONGL · DATA STUDIO — Bestiary module config
    ============================================================ */
@@ -761,6 +767,9 @@ window.DGL_CFG = (() => {
           ${defRow('Immunities', m.damage_immunities, '#34d399')}
           ${defRow('Vulnerabilities', m.damage_vulnerabilities, '#f87171')}
           ${defRow('Condition immunities', m.condition_immunities, '#e2e8f0')}
+          ${kv('Blows', esc(m.attack_type || 'physical'))}
+          ${kv('Hit leaves', esc(m.on_hit || '—'))}
+          ${kv('Magic', [m.magic_resistance && 'magic resistance', m.resist_nonmagical && 'resists plain weapons', m.immune_nonmagical && 'immune to plain weapons'].filter(Boolean).join(', ') || '—')}
         </div>
         <div class="dsection"><h4>Description</h4>
           <p class="desc-text">${m.description ? keepBr(m.description) : dash}</p>
@@ -789,6 +798,14 @@ window.DGL_CFG = (() => {
         datalist: DAMAGETYPES, placeholder: 'poison, psychic …' },
       { id: 'condition_immunities', label: 'Condition immunities', type: 'list', full: true,
         datalist: CONDITIONS, placeholder: 'frightened, poisoned …' },
+      { id: 'attack_type', label: 'Attack damage type', type: 'select', emptyLabel: 'physical',
+        options: () => DAMAGETYPES.map(t => [t, t]) },
+      { id: 'on_hit', label: 'Condition on hit', type: 'select', emptyLabel: 'none',
+        options: () => ['blinded', 'frightened', 'paralyzed', 'petrified', 'poisoned'].map(t => [t, t]) },
+      { id: 'magic_resistance', label: 'Magic resistance', type: 'toggle',
+        hint: 'Advantage on saving throws against spells.' },
+      { id: 'resist_nonmagical', label: 'Resists non-magical weapons', type: 'toggle' },
+      { id: 'immune_nonmagical', label: 'Immune to non-magical weapons', type: 'toggle' },
       { id: 'description', label: 'Description', type: 'textarea', full: true,
         hint: 'Keep the “Type: …” prefix — the creature type badge is parsed from it. <br> line breaks are supported.' },
     ],
@@ -810,6 +827,12 @@ window.DGL_CFG = (() => {
       o.damage_immunities = splitList(d.damage_immunities);
       o.damage_vulnerabilities = splitList(d.damage_vulnerabilities);
       o.condition_immunities = splitList(d.condition_immunities);
+      for (const k of ['attack_type', 'on_hit']) {
+        if (d[k]) o[k] = d[k]; else delete o[k];
+      }
+      for (const k of ['magic_resistance', 'resist_nonmagical', 'immune_nonmagical']) {
+        if (d[k]) o[k] = true; else delete o[k];
+      }
       o.description = d.description;
     },
   };
@@ -817,6 +840,8 @@ window.DGL_CFG = (() => {
 
 </script>
 <script>
+/* Dragon GL - Copyright (C) 2026 Nicola Taibi
+   SPDX-License-Identifier: GPL-3.0-or-later */
 /* ============================================================
    DRAGONGL · DATA STUDIO — core CRUD engine
    Shared by bestiary.html / items.html / spells.html
@@ -1267,6 +1292,12 @@ function fieldHtml(f, target) {
           ${sl('vfx_r', 'Red', v.r, '#f87171')}${sl('vfx_g', 'Green', v.g, '#4ade80')}${sl('vfx_b', 'Blue', v.b, '#60a5fa')}
         </div></div></div>`;
     }
+    case 'json': {
+      /* An object edited as JSON text (validated on save; the schema in
+         data/schema/ and tools/check_data.py check its fields). */
+      const text = cur === undefined ? '' : JSON.stringify(cur, null, 2);
+      return `<div class="fg ${full}">${label}<textarea id="fld_${f.id}" data-fld="${f.id}" class="mono" spellcheck="false" rows="10">${esc(text)}</textarea>${hint}</div>`;
+    }
     default:
       return `<div class="fg ${full}">${label}<input id="fld_${f.id}" data-fld="${f.id}" type="text" value="${esc(cur ?? '')}"></div>`;
   }
@@ -1301,6 +1332,13 @@ function collectForm(root) {
       d[f.id] = { type: q('vfx_type'), r: q('vfx_r'), g: q('vfx_g'), b: q('vfx_b') };
     } else if (f.type === 'toggle') {
       d[f.id] = !!root.querySelector(`[data-fld="${f.id}"]`)?.checked;
+    } else if (f.type === 'json') {
+      const text = root.querySelector(`[data-fld="${f.id}"]`).value.trim();
+      try {
+        d[f.id] = text ? JSON.parse(text) : undefined;
+      } catch (e) {
+        d[f.id] = { __invalid: e.message };
+      }
     } else {
       const el = root.querySelector(`[data-fld="${f.id}"]`);
       d[f.id] = el ? el.value.trim() : '';
@@ -1332,6 +1370,14 @@ function submitForm(ov) {
     if (!f.req) continue;
     const v = Array.isArray(d[f.id]) ? d[f.id].length : String(d[f.id] ?? '').trim();
     if (!v) { toast(`“<b>${esc(f.label)}</b>” is required.`, 'err'); ov.querySelector(`[data-fld="${f.id}"]`)?.focus(); return; }
+  }
+  for (const f of CFG.formFields) {
+    const v = d[f.id];
+    if (f.type === 'json' && v && typeof v === 'object' && '__invalid' in v) {
+      toast(`“<b>${esc(f.label)}</b>” is not valid JSON: ${esc(v.__invalid)}`, 'err', 6000);
+      ov.querySelector(`[data-fld="${f.id}"]`)?.focus();
+      return;
+    }
   }
   const target = S.editRef;
   let name;

@@ -44,6 +44,10 @@
 #  ifndef NOMINMAX
 #    define NOMINMAX
 #  endif
+/*no GDI: its Polygon() clashes with the map generator's type*/
+#  ifndef NOGDI
+#    define NOGDI
+#  endif
 /*winsock2.h MUST precede windows.h (otherwise the legacy winsock.h is
  * pulled in and the two clash).*/
 #  include <winsock2.h>
@@ -81,6 +85,10 @@ char *strcasestr(const char *haystack, const char *needle);
 #    define strtok_r(s, d, p) strtok_s((s), (d), (p))
 #  endif
 #  define MSG_NOSIGNAL 0
+/*The POSIX calls of the server (sockets, epoll, eventfd, flock...)*/
+#  ifndef DRAGONGL_WEPOLL_SOURCE /*wepoll.c carries its own header*/
+#    include "platform_win32.h"
+#  endif
 #else
 #  include <unistd.h>
 #  include <sys/types.h>
@@ -97,6 +105,12 @@ bool plat_sock_would_block(void);
 void plat_sock_close(int sock);
 /*Make a socket non-blocking.*/
 void plat_sock_set_nonblocking(int sock);
+/*Wait until sock is readable: >0 readable (or closed by the peer),
+ * 0 timeout, <0 error. poll() on POSIX, WSAPoll() on Windows.*/
+int plat_poll_read(int sock, int timeout_ms);
+/*Another process holds an exclusive lock on the file (the state lock of a
+ * running dragongl_server). False if the file does not exist.*/
+bool plat_file_locked(const char *path);
 /*Sleep for ms milliseconds.*/
 void plat_sleep_ms(int ms);
 /*Monotonic clock in milliseconds.*/

@@ -32,6 +32,8 @@
 #include <stdint.h>
 #include "map.h"
 #include "protocol.h"
+#include "client_proto.h"
+#include "client_tls.h"
 
 /*Client-side entity cache size (see the FEATURE LIMIT note in the
  * original code: on a crowded floor, entities beyond this are dropped;
@@ -54,6 +56,7 @@ typedef struct {
     int level;
     int race_id, class_id;
     uint32_t look_seed;
+    bool has_info;      /*kind/level/race... came from the server (extension)*/
     /*death: the server only reports the kill event; the entity is hidden
      * at once (the scene plays the fall as a corpse) and dropped shortly
      * after, unless it comes back (respawn) with a fresh state.*/
@@ -85,14 +88,14 @@ extern int g_str, g_dex, g_con, g_intel, g_wis, g_cha;
 extern int g_equipped_mask;
 extern int g_my_level, g_my_xp, g_my_floor;
 extern int g_my_xp_next, g_stat_points, g_max_floor;
-/*Wire protocol spoken with the current server: PROTOCOL_VERSION, or 3
- * when connected to an original (classic) Dragon GL server. In classic
- * mode the server sends no inventory/shop/spellbook/game-event messages
- * and no creature identity: the client fills in what it can.*/
-extern int g_proto_version;
-#define PROTO_CLASSIC 3
-static inline bool client_classic(void) { return g_proto_version < PROTOCOL_VERSION; }
-MsgHeader client_hdr(MsgType type, int length);
+/*The server speaks the DragonGL+ extension of protocol v5 (inventory,
+ * shop, spellbook, game events, creature identity). Without it (Nicola
+ * Taibi's Dragon GL server, "compatibility mode") those windows fall back
+ * to chat commands and the client fills in what it can.*/
+extern atomic_bool g_server_plus;
+static inline bool client_classic(void) { return !atomic_load(&g_server_plus); }
+/*TLS session with the server (NULL when not connected).*/
+extern ClientTls *g_tls;
 extern uint64_t g_my_gold;
 extern int g_my_ac;
 extern int g_vision_radius;

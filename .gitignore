@@ -3,12 +3,16 @@ build/
 _build/
 _local_build
 
-# Directory SAVES
+# Server state (world, saves, logs) of a development tree, and the state
+# directories the integration tests create where they are run
+/state/
+/state-*/
 saves/
-tests/
 __pycache__/
 
 # others
+*.orig
+*.rej
 *.o
 *.d
 *.tar.gz
@@ -23,6 +27,14 @@ rpmbuild/
 _local_build/
 _srpm_test/
 build-tests/
+build-tests-asan/
+build-integration/
+build-quality/
+# CMake presets (build-<preset>/) and tools/release.sh
+/build-*/
+# Logs of manual runs (docs/GPU_TESTING.md writes client.log)
+/*.log
+/dist/
 
 # ignore
 npcs.dat
@@ -38,7 +50,9 @@ local_check.sh
 # dev artifacts produced by the DM commands (dm_pdf / dm_mapfloor)
 map_dump*.txt
 map_floor*.pdf
+
+# DragonGL+: release packages and the pre-built SPIR-V of the client
 build-linux/
 build-windows/
-dist/
 !shaders/spv/*.spv
+downloads/

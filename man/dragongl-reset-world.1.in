@@ -1,0 +1,57 @@
+.\" Dragon GL - Copyright (C) 2026 Nicola Taibi
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH DRAGONGL-RESET-WORLD 1 "@DRAGONGL_RELEASE_DATE@" "Dragon GL @DRAGONGL_VERSION@" "User Commands"
+.SH NAME
+dragongl-reset-world \- reset the Dragon GL world state
+.SH SYNOPSIS
+.B dragongl-reset-world
+.RB [ \-S | \-\-state\-dir
+.IR dir ]
+.RB [ \-y | \-\-yes ]
+.RB [ \-h | \-\-help ]
+.SH DESCRIPTION
+.B dragongl-reset-world
+deletes the state of a Dragon GL server, so that the next start of
+.BR dragongl_server (1)
+generates a new world. It removes, inside the state directory:
+.IP \- 2
+.IR world.dat ", " npcs.dat ", " artifacts.dat
+(world, NPCs, unique artifacts);
+.IP \- 2
+.I saves/*.save
+and
+.I saves/tombstone_*.dat
+(every character and tombstone);
+.IP \- 2
+.I combat_log.json
+(and its rotation) and the DM maps in
+.IR maps/ .
+.PP
+The script refuses to run while a server holds the lock of that state
+directory, and refuses a directory without a
+.I saves/
+subdirectory, so a wrong path can never delete unrelated files.
+.SH OPTIONS
+.TP
+.BR \-S ", " \-\-state\-dir " \fIdir\fR"
+State directory to reset. Without it the script uses
+.BR DRAGONGL_STATE_DIR ,
+then
+.I state/
+when run from a development tree, then
+.IR $XDG_STATE_HOME/dragongl ,
+then
+.IR ~/.local/state/dragongl .
+.TP
+.BR \-y ", " \-\-yes
+Do not ask for confirmation.
+.TP
+.BR \-h ", " \-\-help
+Show a short help message and exit.
+.SH SEE ALSO
+.BR dragongl_server (1),
+.BR dragongl-server (1)
+.SH AUTHOR
+Nicola Taibi <nicola.taibi.1967@gmail.com>
+.SH LICENSE
+GPL-3.0-or-later

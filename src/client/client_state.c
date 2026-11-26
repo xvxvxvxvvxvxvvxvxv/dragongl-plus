@@ -21,6 +21,8 @@
 
 #include "client_state.h"
 #include "net.h"
+#include "binio.h"
+#include "wire.h"
 #include "platform.h"
 #include "ui.h"
 #include <stdio.h>
@@ -41,13 +43,8 @@ int g_str = 10, g_dex = 10, g_con = 10, g_intel = 10, g_wis = 10, g_cha = 10;
 int g_equipped_mask = 0;
 int g_my_level = 1, g_my_xp = 0, g_my_floor = 0;
 int g_my_xp_next = 300, g_stat_points = 0, g_max_floor = 0;
-int g_proto_version = PROTOCOL_VERSION;
-
-MsgHeader client_hdr(MsgType type, int length) {
-    MsgHeader h = msg_hdr(type, length);
-    h.version = (uint16_t)g_proto_version;
-    return h;
-}
+atomic_bool g_server_plus;
+ClientTls *g_tls;
 uint64_t g_my_gold = 0;
 int g_my_ac = 10;
 int g_vision_radius = 4;
@@ -136,30 +133,34 @@ void frame_snapshot_acquire(FrameSnapshot *snap) {
     pthread_mutex_unlock(&g_state_mutex);
 }
 
+/*Send one encoded frame (the TLS session serializes the senders).*/
+static void send_frame(BinWriter *w) {
+    if (!w->failed && w->len > 0) {
+        pthread_mutex_lock(&g_net_mutex);
+        if (g_tls) client_tls_send(g_tls, w->data, w->len);
+        pthread_mutex_unlock(&g_net_mutex);
+    }
+    bw_free(w);
+}
+
 void client_send_move(int dx, int dy) {
-    MsgHeader hdr = client_hdr(MSG_MOVE, (int)sizeof(MsgMove));
-    MsgMove m;
-    if (g_my_entity_id == -1 || g_server_sock < 0) return;
-    memset(&m, 0, sizeof(m));
-    m.entity_id = g_my_entity_id;
-    m.dx = dx;
-    m.dy = dy;
-    pthread_mutex_lock(&g_net_mutex);
-    net_send(g_server_sock, &hdr, sizeof(MsgHeader));
-    net_send(g_server_sock, &m, sizeof(MsgMove));
-    pthread_mutex_unlock(&g_net_mutex);
+    if (g_my_entity_id == -1 || !g_tls) return;
+    MsgMove m = {dx, dy};
+    BinWriter w;
+    bw_init(&w);
+    if (wire_put_move(&w, &m)) send_frame(&w);
+    else bw_free(&w);
 }
 
 void client_send_text_cmd(const char *cmd) {
-    MsgHeader hdr = client_hdr(MSG_TEXT_CMD, (int)sizeof(MsgTextCmd));
+    if (!g_tls) return;
     MsgTextCmd m;
-    if (g_server_sock < 0) return;
     memset(&m, 0, sizeof(m));
     copy_str(m.cmd, cmd, sizeof(m.cmd));
-    pthread_mutex_lock(&g_net_mutex);
-    net_send(g_server_sock, &hdr, sizeof(MsgHeader));
-    net_send(g_server_sock, &m, sizeof(MsgTextCmd));
-    pthread_mutex_unlock(&g_net_mutex);
+    BinWriter w;
+    bw_init(&w);
+    if (wire_put_text_cmd(&w, &m)) send_frame(&w);
+    else bw_free(&w);
 }
 
 /*Colour a log line from its [TAG] prefix.*/

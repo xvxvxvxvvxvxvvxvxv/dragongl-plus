@@ -25,9 +25,9 @@
 ---
 
 **DragonGL+** is a fork of [**Dragon GL**](https://github.com/nicolataibi/dragongl) by **Nicola Taibi**.
-It keeps the whole game world and rule set of the original and adds a new graphical
-client, a procedural soundtrack, many gameplay fixes and ready-to-play builds:
-**download, unzip, double-click — nothing to install.**
+It runs on Nicola's current server — the whole game world, rule set and fixes of
+Dragon GL — and adds a new graphical client, a procedural soundtrack, quality-of-life
+features and ready-to-play builds: **download, unzip, double-click — nothing to install.**
 
 ## 📑 Contents
 
@@ -39,7 +39,7 @@ client, a procedural soundtrack, many gameplay fixes and ready-to-play builds:
 - [🖥️ Hosting a server](#️-hosting-a-server)
 - [🔨 Building from source](#-building-from-source)
 - [🧱 Project layout](#-project-layout)
-- [📚 Full manual (original Dragon GL README)](#-full-manual-original-dragon-gl-readme)
+- [📚 Full manual (Dragon GL)](#-full-manual-dragon-gl)
 - [⚖️ Credits & license](#️-credits--license)
 
 ---
@@ -64,11 +64,15 @@ client, a procedural soundtrack, many gameplay fixes and ready-to-play builds:
   `~/.config/dragongl/solo` (Linux).
 - 🤝 **Join a Server** — enter the address, port and server password of a friend's server
   (see [Hosting a server](#️-hosting-a-server)).
-- 🏛️ **Classic servers** — servers still running the original Dragon GL are detected
-  automatically and the client switches to a compatibility mode: movement, map, combat
-  and chat work as usual; inventory, shops and spells go through
+- 🏛️ **Dragon GL servers** — servers running Nicola's Dragon GL (protocol v5) are
+  recognised automatically and the client switches to a compatibility mode: movement,
+  map, combat and chat work as usual; inventory, shops and spells go through
   [chat commands](#️-console-commands) (`inventory`, `use <n>`, `buy <n>`, `cast <spell>`…).
-  Creatures appear without names, because the original server does not send them.
+  Creatures appear without names, because those servers do not send them.
+
+Connections are encrypted (TLS 1.3). The first time you join a server its certificate
+fingerprint is remembered; if it ever changes, the game refuses to connect and tells you
+which line of `known_servers` to remove.
 
 Checksums (`SHA256SUMS.txt`) and older versions are on the
 [Releases page](https://github.com/xvxvxvxvvxvxvvxvxv/dragongl-plus/releases).
@@ -113,9 +117,10 @@ Checksums (`SHA256SUMS.txt`) and older versions are on the
 - Click to walk (A* pathfinding), attack, talk, pick up; camera-relative WASD.
 - Auto-attack, <kbd>Tab</kbd> targeting, <kbd>Space</kbd> attacks the nearest foe.
 - **Travel**: right-click an explored spot on the map to walk there.
-- Starting gear equipped automatically, fixed carrying capacity.
-- Balanced combat pace: monsters hit back, attack speed follows the tick system.
-- Monsters updated every tick, visible respawns, gold piles vanish when picked up.
+- Starting gear equipped automatically; creatures move smoothly between your steps.
+- Built on Nicola's current server: monsters fight with their bestiary stats,
+  resistances and abilities, every spell and magic item works, merchants restock.
+- Heroes made with DragonGL+ 2026.10 are imported into the new world automatically.
 
 </td>
 <td valign="top">
@@ -123,10 +128,12 @@ Checksums (`SHA256SUMS.txt`) and older versions are on the
 ### 🎵 Audio & builds
 - Procedural soundtrack synthesized in real time — six themes with a
   combat layer that swells when enemies are near — plus synthesized SFX.
-- Portable Windows and Linux packages, no dependencies.
-- Server: `--local` solo mode, command rate limiting, separate state
-  directory, graceful shutdown that saves everyone.
-- CI with sanitizers and a server smoke test; releases built on every tag.
+- Portable Windows and Linux packages, no dependencies (OpenSSL and
+  libsodium linked statically).
+- The server also runs on Windows; `--local` private mode for Play Solo,
+  graceful shutdown that saves everyone.
+- CI: Dragon GL's unit and integration tests, sanitizers, a smoke test of
+  the Windows server; releases built on every tag.
 
 </td>
 </tr>
@@ -186,7 +193,7 @@ Chaos-born · Hippo-folk · Simian-glider · Void-elf · Trickster-kin · Half-v
 Witch-blood · Awakened-dead
 
 Each race has its own traits and a dedicated 3D model.
-Portraits and descriptions: [original README → Races](https://github.com/nicolataibi/dragongl/blob/main/README.md#-playable-ancestries-races).
+Portraits and descriptions: [Dragon GL manual → Races](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-playable-ancestries-races).
 
 </details>
 
@@ -204,7 +211,7 @@ Portraits and descriptions: [original README → Races](https://github.com/nicol
 | Monk | d8 | Dexterity, Wisdom | | Wizard | d6 | Intelligence |
 
 Every class has a temple or dojo on Floor 0 where its spells and techniques are learned.
-Portraits: [original README → Classes](https://github.com/nicolataibi/dragongl/blob/main/README.md#️-heroic-professions-classes).
+Portraits: [Dragon GL manual → Classes](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#️-heroic-professions-classes).
 
 </details>
 
@@ -286,34 +293,37 @@ press <kbd>Enter</kbd>, type, and use <kbd>Tab</kbd> to complete.
 </details>
 
 The complete reference, with every option and edge case, is in the
-[original README → Player Console Commands](https://github.com/nicolataibi/dragongl/blob/main/README.md#️-player-console-commands).
+[Dragon GL manual → Player Console Commands](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#️-player-console-commands).
 
 ---
 
 ## 🖥️ Hosting a server
 
-Both packages include the dedicated server. On the host computer:
+Both packages include the dedicated server (it is Nicola's server, with the DragonGL+
+extension). Put the access password in a text file, then on the host computer:
 
 ```sh
 # Windows
-dragongl_server.exe -P 8080 -p <server password> -d <dm password>
+dragongl_server.exe -P 8080 --password-file server-password.txt
 # Linux
-./dragongl_server -P 8080 -p <server password> -d <dm password>
+./dragongl_server -P 8080 --password-file server-password.txt
 ```
 
 Open **TCP port 8080** on the firewall/router; players choose **Join a Server** and enter
-the address, port and server password.
+the address, port and server password. Passwords are never accepted on the command line;
+the server creates its TLS certificate at the first start and logs its fingerprint, which
+players can compare with the one their game shows.
 
 | Option | Meaning | Default |
 |---|---|---|
 | `-P`, `--port` | TCP port | `8080` |
-| `-p`, `--password` | password every player needs to join | `dragongl_secret` |
-| `-d`, `--dm-password` | password of the Dungeon Master account (`dm`) | `dragongl_dm_secret` |
-| `-D`, `--data-dir` | game data (bestiary, items, spells) | `data/` in the current folder or next to the executable |
-| `-S`, `--state-dir` | where the world and characters are saved | data directory |
+| `--password-file <f>` | password every player needs to join (8–63 characters) | `DRAGONGL_SERVER_PASSWORD` variable |
+| `--dm-password-file <f>` | password of the Dungeon Master account (`dm`) | none: no DM account |
+| `-D`, `--data-dir` | game data (bestiary, items, spells) | `data/` next to the program |
+| `-S`, `--state-dir` | where the world, characters and certificate are saved | `~/.local/state/dragongl`, `%LOCALAPPDATA%\DragonGL\server` |
+| `--tls-cert`, `--tls-key` | a certificate of your own | created at the first start |
 
-> [!WARNING]
-> Change both default passwords on any server reachable from the Internet.
+Both DragonGL+ players and Dragon GL players (Nicola's client) can join a DragonGL+ server.
 
 <details>
 <summary><b>👑 Dungeon Master commands</b></summary>
@@ -323,7 +333,7 @@ Log in with the name **`dm`** and the DM password to get these commands:
 `dm_telemetry`, `dm_gold`, `dm_level`, `dm_spawn`, `dm_boss`, `dm_merchant`, `dm_place`,
 `dm_shop`, `dm_goto`, `dm_find_monster`, `dm_find_item`, `dm_mapfloor`, `dm_pdf`.
 
-Details: [original README → Dungeon Master privileges](https://github.com/nicolataibi/dragongl/blob/main/README.md#-dungeon-master-dm-privileges).
+Details: [Dragon GL manual → Dungeon Master privileges](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-dungeon-master-dm-privileges).
 
 </details>
 
@@ -346,18 +356,25 @@ DragonGL-Plus [gl|vk] [--fullscreen|--windowed] [server_ip [port]]
 
 ## 🔨 Building from source
 
-Every library is vendored in `third_party/` (GLFW, volk, Vulkan headers, miniaudio, stb,
-wepoll, fonts): you only need a C compiler, CMake and, on Linux, the X11 headers.
+The client libraries are vendored in `third_party/` (GLFW, volk, Vulkan headers,
+miniaudio, stb, wepoll, cJSON, fonts); the server and the encrypted connection need
+OpenSSL 3 and libsodium.
 
 ```sh
-# Linux  (Debian/Ubuntu: sudo apt install build-essential cmake libx11-dev libxrandr-dev \
-#                        libxinerama-dev libxcursor-dev libxi-dev)
+# Linux  (Debian/Ubuntu: sudo apt install build-essential cmake libssl-dev libsodium-dev \
+#                        libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev)
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ./build/dragongl_client            # or: ./build/dragongl_client vk
 
-# Windows, cross-compiled from Linux with MinGW-w64
-cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake -DDRAGONGL_PORTABLE=ON
+# Tests: Dragon GL's unit and integration suites plus the DragonGL+ extension
+cmake -B build-tests tests && cmake --build build-tests && ctest --test-dir build-tests
+cmake -B build-it tests/integration && cmake --build build-it && ctest --test-dir build-it -j4
+
+# Windows, cross-compiled from Linux with MinGW-w64 (static OpenSSL/libsodium first)
+tools/build_deps.sh windows deps-win
+cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake -DDRAGONGL_PORTABLE=ON \
+      -DDRAGONGL_DEPS_PREFIX=$PWD/deps-win
 cmake --build build-win -j
 
 # Portable release archives for both platforms, into dist/
@@ -377,8 +394,9 @@ tools/build_release.sh
 | Path | Contents |
 |---|---|
 | `src/client/` | game client: menus and HUD, scene builder, OpenGL and Vulkan back-ends, audio and music |
-| `src/server/` | authoritative server: world, AI, combat, spells, economy, saves |
-| `src/shared/` | network protocol, map generation, rules and data loading |
+| `src/server/` | Dragon GL's authoritative server; `server_plus.c` is the DragonGL+ extension |
+| `src/shared/` | network protocol (`wire.c`, `wire_plus.c`), TLS, map generation, rules, data loading, Windows layer |
+| `tests/` | unit and integration tests (Dragon GL's and DragonGL+'s) |
 | `data/` | bestiary, items and spells (JSON) |
 | `shaders/` | GLSL sources and pre-built SPIR-V |
 | `tools/` | release scripts, balance analyser, PDF map generator, web data editors |
@@ -386,22 +404,24 @@ tools/build_release.sh
 
 ---
 
-## 📚 Full manual (original Dragon GL README)
+## 📚 Full manual (Dragon GL)
 
-The original README by Nicola Taibi is a complete manual of the game world, with
+Nicola Taibi's `LORE.md` is the complete manual of the game world and its rules, with
 hundreds of illustrations. To keep this page light, those sections are not repeated
-here — they still apply to DragonGL+ and can be read in the original repository:
+here — they apply to DragonGL+ and can be read in the original repository. The network
+protocol is in [PROTOCOL.md](PROTOCOL.md), the DragonGL+ extension in
+[PROTOCOL_PLUS.md](PROTOCOL_PLUS.md).
 
 | Topic | Sections |
 |---|---|
-| 🌍 **World & story** | [The Lore](https://github.com/nicolataibi/dragongl/blob/main/README.md#-the-lore-the-deep-descent) · [The Legend of Kaelen](https://github.com/nicolataibi/dragongl/blob/main/README.md#-the-legend-of-kaelen-expansion-of-the-descent) · [Dragon's Maw — the novel (10 books)](https://github.com/nicolataibi/dragongl/blob/main/README.md#dragons-maw) |
-| 🧑‍🤝‍🧑 **Heroes** | [Races, with portraits](https://github.com/nicolataibi/dragongl/blob/main/README.md#-playable-ancestries-races) · [Classes](https://github.com/nicolataibi/dragongl/blob/main/README.md#️-heroic-professions-classes) · [Conditions, hunger & combat](https://github.com/nicolataibi/dragongl/blob/main/README.md#-advanced-mechanics-conditions-hunger--combat) |
-| 🏰 **Dungeon** | [Trap gallery](https://github.com/nicolataibi/dragongl/blob/main/README.md#️-trap-gallery) · [Thematic rooms](https://github.com/nicolataibi/dragongl/blob/main/README.md#-procedural-thematic-rooms) · [Monsters & bosses](https://github.com/nicolataibi/dragongl/blob/main/README.md#-monster--boss-generation-system-difficulty-tiers) · [Voxel types](https://github.com/nicolataibi/dragongl/blob/main/README.md#-voxel-type-reference-technical-appendix) · [Map dump](https://github.com/nicolataibi/dragongl/blob/main/README.md#maps-dump) |
-| 🏙️ **Village** | [City (Floor 0)](https://github.com/nicolataibi/dragongl/blob/main/README.md#️-city-floor-0-and-ui-updates) · [Temples and dojos](https://github.com/nicolataibi/dragongl/blob/main/README.md#temples-and-dojos) · [Statues](https://github.com/nicolataibi/dragongl/blob/main/README.md#statues) · [Fountains](https://github.com/nicolataibi/dragongl/blob/main/README.md#fountains) |
-| 💰 **Economy & loot** | [Merchant guild](https://github.com/nicolataibi/dragongl/blob/main/README.md#️-economy--merchant-guild) · [Loot, rarity & grimoires](https://github.com/nicolataibi/dragongl/blob/main/README.md#-economy-loot--rarity-system) · [Reactive economy](https://github.com/nicolataibi/dragongl/blob/main/README.md#-reactive-economy-supply-demand-system) |
-| 🔮 **Magic** | [Magic propagation & AoE](https://github.com/nicolataibi/dragongl/blob/main/README.md#️-magic-propagation-area-of-effect-aoe--vfx-types) · [Special magic router](https://github.com/nicolataibi/dragongl/blob/main/README.md#-special-magic-router-spell_router) |
-| ⚙️ **Engine internals** | [Core architecture](https://github.com/nicolataibi/dragongl/blob/main/README.md#️-core-architecture--features) · [Save state](https://github.com/nicolataibi/dragongl/blob/main/README.md#-complete-save-state--voxel-persistence) · [Speed/tick system](https://github.com/nicolataibi/dragongl/blob/main/README.md#-advanced-speedtick-system) · [Swarm AI](https://github.com/nicolataibi/dragongl/blob/main/README.md#-swarm-ai-umoria-inspired-modernized) · [FloorStats cache](https://github.com/nicolataibi/dragongl/blob/main/README.md#-performance-optimization-floorstats-cache) |
-| 🖼️ **Original release** | [Screenshots](https://github.com/nicolataibi/dragongl/blob/main/README.md#screenshots) · [Original Vulkan renderer](https://github.com/nicolataibi/dragongl/blob/main/README.md#-vulkan-gpu-driven-rendering-architecture) |
+| 🌍 **World & story** | [The Lore](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-the-lore-the-deep-descent) · [The Legend of Kaelen](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-the-legend-of-kaelen-expansion-of-the-descent) · [Dragon's Maw — the novel (10 books)](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#dragons-maw) |
+| 🧑‍🤝‍🧑 **Heroes** | [Races, with portraits](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-playable-ancestries-races) · [Classes](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#️-heroic-professions-classes) · [Conditions, hunger & combat](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-advanced-mechanics-conditions-hunger--combat) |
+| 🏰 **Dungeon** | [Trap gallery](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#️-trap-gallery) · [Thematic rooms](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-procedural-thematic-rooms) · [Monsters & bosses](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-monster--boss-generation-system-difficulty-tiers) · [Voxel types](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-voxel-type-reference-technical-appendix) · [Map dump](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#maps-dump) |
+| 🏙️ **Village** | [City (Floor 0)](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#️-city-floor-0-and-ui-updates) · [Temples and dojos](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#temples-and-dojos) · [Statues](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#statues) · [Fountains](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#fountains) |
+| 💰 **Economy & loot** | [Merchant guild](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#️-economy--merchant-guild) · [Loot, rarity & grimoires](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-economy-loot--rarity-system) · [Reactive economy](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-reactive-economy-supply-demand-system) |
+| 🔮 **Magic** | [Magic propagation & AoE](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#️-magic-propagation-area-of-effect-aoe--vfx-types) · [Spell effects and magic router](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-spell-effects-and-the-magic-router) |
+| ⚙️ **Engine internals** | [Core architecture](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#️-core-architecture--features) · [Save state](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-complete-save-state--voxel-persistence) · [Speed/tick system](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-advanced-speedtick-system) · [Swarm AI](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-swarm-ai-umoria-inspired-modernized) · [FloorStats cache](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-performance-optimization-floorstats-cache) |
+| 🖼️ **Original release** | [Screenshots](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#screenshots) · [Original Vulkan renderer](https://github.com/nicolataibi/dragongl/blob/main/LORE.md#-vulkan-gpu-driven-rendering-architecture) |
 
 > [!NOTE]
 > The original screenshots and the description of the original HUD show the 2026 Dragon GL
@@ -419,8 +439,8 @@ here — they still apply to DragonGL+ and can be read in the original repositor
   ChatGPT."*
 - **DragonGL+** — fork distributed under the same license, [GPL-3.0-or-later](LICENSE.txt).
 - **Third-party components** — GLFW (zlib), volk (MIT), Vulkan headers (Apache-2.0 / MIT),
-  miniaudio (MIT-0), stb (public domain / MIT), wepoll (BSD-2), cJSON (MIT),
-  Cinzel and Alegreya Sans fonts (SIL OFL 1.1); the Windows build also contains the
+  miniaudio (MIT-0), stb (public domain / MIT), wepoll (BSD-2), cJSON (MIT), OpenSSL
+  (Apache-2.0), libsodium (ISC), Cinzel and Alegreya Sans fonts (SIL OFL 1.1); the Windows build also contains the
   MinGW-w64 runtime and winpthreads (ZPL-2.1 / MIT / BSD). Their licenses ship in the
   `licenses/` folder of every package.
 - DragonGL+ is provided **without any warranty**, as stated in the GPL.

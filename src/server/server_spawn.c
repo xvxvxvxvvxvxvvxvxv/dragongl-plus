@@ -25,13 +25,7 @@
  *   - City merchants (floor 0)
  *   - Magic shops (floor 0 and deep floors)
  *   - Dungeon population (floors 1..MAX_FLOORS)
- *   - Ghost/Bones from bones_*.dat files
  *   - Treasures and wandering merchants
- *
- * Global dependencies (defined in main_server.c):
- *   - item_database[], item_database_size  (da data_loader.h)
- *   - bestiary_data[], bestiary_size       (da bestiary.h)
- *   - master_world                         (da server_internal.h)
  */
 
 #include "server_spawn.h"
@@ -42,6 +36,7 @@
 #include "data_loader.h"
 #include "items.h"
 #include "server_entities.h"
+#include "server_tiles.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -58,14 +53,14 @@
  * @n: Recipient merchant NPC.
  * @template_idx: Index into the item_database of the template to add.
  * @stock: Initial stock quantity.*/
-void add_item_to_shop(NPC *n, int template_idx, int stock) {
-  if (n->merchant.item_count >= MAX_SHOP_ITEMS) {
-    return;
-  }
-  n->merchant.item_templates[n->merchant.item_count] = template_idx;
-  n->merchant.item_stock[n->merchant.item_count] = stock;
-  n->merchant.item_stock_max[n->merchant.item_count] = stock;
-  n->merchant.item_count++;
+void add_item_to_shop(MerchantData *m, int template_idx, int stock) {
+    if (m->item_count >= MAX_SHOP_ITEMS) {
+        return;
+    }
+    m->item_templates[m->item_count] = template_idx;
+    m->item_stock[m->item_count] = stock;
+    m->item_stock_max[m->item_count] = stock;
+    m->item_count++;
 }
 
 /**
@@ -74,12 +69,12 @@ void add_item_to_shop(NPC *n, int template_idx, int stock) {
  *
  * Returns: the index into item_database, or -1 if not found.*/
 static int get_item_idx_by_name(const char *name) {
-  for (int i = 0; i < item_database_size; i++) {
-    if (strcasecmp(item_database[i].name, name) == 0) {
-      return i;
+    for (int i = 0; i < item_database_size; i++) {
+        if (strcasecmp(item_database[i].name, name) == 0) {
+            return i;
+        }
     }
-  }
-  return -1;
+    return -1;
 }
 
 /**
@@ -89,64 +84,69 @@ static int get_item_idx_by_name(const char *name) {
  * @spec: Merchant specialization.
  *
  * Returns: true if the item belongs to the shop category.*/
+/*A staff or a rod held as a weapon, or a magic robe worn as clothing: the
+ * wands-and-staffs shop and the magic shop sell them, not the smith.*/
+static bool is_staff(const ItemTemplate *it) {
+    return it->category == ITEM_WEAPON &&
+           (strncmp(it->name, "Staff of", 8) == 0 || strncmp(it->name, "Rod of", 6) == 0);
+}
+
+static bool is_robe(const ItemTemplate *it) {
+    return it->category == ITEM_ARMOR && strncmp(it->name, "Robe", 4) == 0;
+}
+
 static bool is_item_matching_spec(int item_idx, MerchantSpecialization spec) {
-  ItemTemplate *it = &item_database[item_idx];
-  switch (spec) {
-  case SHOP_GENERAL:
-    return true;
-  case BLACKSMITH:
-    return (it->category == ITEM_WEAPON || it->category == ITEM_ARMOR ||
-            it->category == ITEM_SHIELD || it->category == ITEM_HEAD ||
-            it->category == ITEM_HANDS || it->category == ITEM_FEET ||
-            it->category == ITEM_AMMO);
-  case ALCHEMIST:
-    return (it->category == ITEM_CONSUMABLE &&
-            (strstr(it->name, "Potion") || strstr(it->name, "Antitoxin") ||
-             strstr(it->name, "Oil of"))) ||
-           it->category == ITEM_FUEL;
-  case MAGIC_SHOP:
-    return (it->category == ITEM_RING || it->category == ITEM_NECK ||
-            it->category == ITEM_BACK ||
-            (it->category == ITEM_CONSUMABLE && it->needs_id &&
-             !strstr(it->name, "Ration")));
-  case PROVISIONER:
-    return (it->category == ITEM_LIGHT_SOURCE || it->category == ITEM_FUEL ||
-            it->category == ITEM_MISC ||
-            (it->category == ITEM_CONSUMABLE && strstr(it->name, "Ration")));
-  case BLACK_MARKET:
-    return (it->cost > 5000);
-  case SCROLLS:
-    return (it->category == ITEM_CONSUMABLE && strstr(it->name, "Scroll"));
-  case WANDS_STAFFS:
-    return (it->category == ITEM_MISC &&
-            (strstr(it->name, "Wand") || strstr(it->name, "Staff")));
-  case JEWELRY:
-    return (it->category == ITEM_RING || it->category == ITEM_NECK);
-  case BOOKS_MAGE:
-    return (it->category == ITEM_BOOK &&
-            (it->book_class_mask & ((1u << CLASS_WIZARD) |
-                                    (1u << CLASS_SORCERER) |
-                                    (1u << CLASS_WARLOCK) |
-                                    (1u << CLASS_BARD))));
-  case BOOKS_PRIEST:
-    return (it->category == ITEM_BOOK &&
-            (it->book_class_mask & ((1u << CLASS_CLERIC) |
-                                    (1u << CLASS_DRUID) |
-                                    (1u << CLASS_PALADIN) |
-                                    (1u << CLASS_RANGER))));
-  case BOOKS_MARTIAL:
-    return (it->category == ITEM_BOOK &&
-            (it->book_class_mask & ((1u << CLASS_FIGHTER) |
-                                    (1u << CLASS_BARBARIAN) |
-                                    (1u << CLASS_ROGUE) |
-                                    (1u << CLASS_MONK))));
-  case CURRENCY_EXCHANGE:
-    return (it->category == ITEM_MISC &&
-            (strstr(it->name, "Gold") || strstr(it->name, "Silver") ||
-             strstr(it->name, "Gem")));
-  default:
-    return true;
-  }
+    ItemTemplate *it = &item_database[item_idx];
+    switch (spec) {
+    case SHOP_GENERAL:
+        return true;
+    case BLACKSMITH:
+        return (it->category == ITEM_WEAPON || it->category == ITEM_ARMOR ||
+                it->category == ITEM_SHIELD || it->category == ITEM_HEAD ||
+                it->category == ITEM_HANDS || it->category == ITEM_FEET ||
+                it->category == ITEM_AMMO) &&
+               !is_staff(it) && !is_robe(it);
+    case ALCHEMIST:
+        return (it->category == ITEM_CONSUMABLE &&
+                (it->is_potion || strstr(it->name, "Antitoxin"))) ||
+               it->category == ITEM_FUEL;
+    case MAGIC_SHOP:
+        return (it->category == ITEM_RING || it->category == ITEM_NECK ||
+                it->category == ITEM_BACK || is_robe(it) ||
+                (it->category == ITEM_CONSUMABLE && it->needs_id && !strstr(it->name, "Ration")));
+    case PROVISIONER:
+        return (it->category == ITEM_LIGHT_SOURCE || it->category == ITEM_FUEL ||
+                it->category == ITEM_MISC ||
+                (it->category == ITEM_CONSUMABLE && strstr(it->name, "Ration")));
+    case BLACK_MARKET:
+        return (it->cost > 5000);
+    case SCROLLS:
+        return (it->category == ITEM_CONSUMABLE && strstr(it->name, "Scroll"));
+    case WANDS_STAFFS:
+        return (it->category == ITEM_MISC &&
+                (strstr(it->name, "Wand") || strstr(it->name, "Staff"))) ||
+               is_staff(it);
+    case JEWELRY:
+        return (it->category == ITEM_RING || it->category == ITEM_NECK);
+    case BOOKS_MAGE:
+        return (it->category == ITEM_BOOK &&
+                (it->book_class_mask & ((1u << CLASS_WIZARD) | (1u << CLASS_SORCERER) |
+                                        (1u << CLASS_WARLOCK) | (1u << CLASS_BARD))));
+    case BOOKS_PRIEST:
+        return (it->category == ITEM_BOOK &&
+                (it->book_class_mask & ((1u << CLASS_CLERIC) | (1u << CLASS_DRUID) |
+                                        (1u << CLASS_PALADIN) | (1u << CLASS_RANGER))));
+    case BOOKS_MARTIAL:
+        return (it->category == ITEM_BOOK &&
+                (it->book_class_mask & ((1u << CLASS_FIGHTER) | (1u << CLASS_BARBARIAN) |
+                                        (1u << CLASS_ROGUE) | (1u << CLASS_MONK))));
+    case CURRENCY_EXCHANGE:
+        return (
+            it->category == ITEM_MISC &&
+            (strstr(it->name, "Gold") || strstr(it->name, "Silver") || strstr(it->name, "Gem")));
+    default:
+        return true;
+    }
 }
 
 /**
@@ -154,398 +154,330 @@ static bool is_item_matching_spec(int item_idx, MerchantSpecialization spec) {
  * random items appropriate to his specialization and plan.
  * @n: Merchant NPC to populate.
  * @floor_id: Current floor (used to calibrate the item tier).*/
-static void fill_shop_by_specialization(NPC *n, int floor_id) {
-  n->merchant.item_count = 0;
-  int attempts = 0;
-  int target = 50; // Max 50 items
+static void fill_shop_by_specialization(MerchantData *m, int floor_id) {
+    m->item_count = 0;
+    int attempts = 0;
+    int target = 50; // Max 50 items
 
-  //Determine the maximum tier based on the plan
-  int max_tier = (floor_id / 20) + 1; // Floor 0-19: Tier 1, 20-39: Tier 2…
-  if (max_tier > 5) {
-    max_tier = 5;
-  }
-
-  while (n->merchant.item_count < target && attempts < 5000) {
-    int i_idx = rand() % item_database_size;
-    if (is_item_matching_spec(i_idx, n->merchant.spec)) {
-      //Check cost/tier appropriateness
-      uint64_t cost = item_database[i_idx].cost;
-      int item_tier = 0;
-      if (cost >= 1000000) {
-        item_tier = 8;
-      } else if (cost >= 500000) {
-        item_tier = 7;
-      } else if (cost >= 250000) {
-        item_tier = 6;
-      } else if (cost >= 100000) {
-        item_tier = 5;
-      } else if (cost >= 20000) {
-        item_tier = 4;
-      } else if (cost >= 5000) {
-        item_tier = 3;
-      } else if (cost >= 1000) {
-        item_tier = 2;
-      } else if (cost >= 100) {
-        item_tier = 1;
-      } else {
-        item_tier = 0;
-      }
-
-      if (item_tier >= 6) {
-        attempts++;
-        continue;
-      }
-
-      if (item_tier <= max_tier + 1 || n->merchant.spec == BLACK_MARKET) {
-        // Avoid duplicates
-        bool dup = false;
-        for (int j = 0; j < n->merchant.item_count; j++) {
-          if (n->merchant.item_templates[j] == i_idx) {
-            dup = true;
-          }
-        }
-        if (!dup) {
-          int stock = (item_database[i_idx].category == ITEM_CONSUMABLE)
-                          ? (5 + rand() % 10)
-                          : (1 + rand() % 3);
-          add_item_to_shop(n, i_idx, stock);
-        }
-      }
+    //Determine the maximum tier based on the plan
+    int max_tier = (floor_id / 20) + 1; // Floor 0-19: Tier 1, 20-39: Tier 2…
+    if (max_tier > 5) {
+        max_tier = 5;
     }
-    attempts++;
-  }
+
+    while (m->item_count < target && attempts < 5000) {
+        int i_idx = rand() % item_database_size;
+        if (is_item_matching_spec(i_idx, m->spec)) {
+            //Check cost/tier appropriateness
+            uint64_t cost = item_database[i_idx].cost;
+            int item_tier = 0;
+            if (cost >= 1000000) {
+                item_tier = 8;
+            } else if (cost >= 500000) {
+                item_tier = 7;
+            } else if (cost >= 250000) {
+                item_tier = 6;
+            } else if (cost >= 100000) {
+                item_tier = 5;
+            } else if (cost >= 20000) {
+                item_tier = 4;
+            } else if (cost >= 5000) {
+                item_tier = 3;
+            } else if (cost >= 1000) {
+                item_tier = 2;
+            } else if (cost >= 100) {
+                item_tier = 1;
+            } else {
+                item_tier = 0;
+            }
+
+            if (item_tier >= 6) {
+                attempts++;
+                continue;
+            }
+
+            if (item_tier <= max_tier + 1 || m->spec == BLACK_MARKET) {
+                // Avoid duplicates
+                bool dup = false;
+                for (int j = 0; j < m->item_count; j++) {
+                    if (m->item_templates[j] == i_idx) {
+                        dup = true;
+                    }
+                }
+                if (!dup) {
+                    int stock = (item_database[i_idx].category == ITEM_CONSUMABLE)
+                                    ? (5 + rand() % 10)
+                                    : (1 + rand() % 3);
+                    add_item_to_shop(m, i_idx, stock);
+                }
+            }
+        }
+        attempts++;
+    }
 }
 
 /**
  * fill_provisioner_floor0 - Populate a supply store (floor 0) with
  * a curated list of essential survival materials.
  * @n: NPC merchant provider to populate.*/
-static void fill_provisioner_floor0(NPC *n) {
-  n->merchant.item_count = 0;
-
-  //--- LIGHT SOURCES ---
-  int idx;
-  idx = get_item_idx_by_name("Torch");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 20);
-  }
-  idx = get_item_idx_by_name("Lantern, Hooded");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 5);
-  }
-  idx = get_item_idx_by_name("Lantern, Bullseye");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 3);
-  }
-  idx = get_item_idx_by_name("Oil (flask)");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 20);
-  }
-
-  // --- SURVIVAL AND CAMPING ---
-  idx = get_item_idx_by_name("Rations (1 day)");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 20);
-  }
-  idx = get_item_idx_by_name("Waterskin");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 10);
-  }
-  idx = get_item_idx_by_name("Bedroll");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 5);
-  }
-  idx = get_item_idx_by_name("Rope, Hempen (50 feet)");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 5);
-  }
-  idx = get_item_idx_by_name("Rope, Silk (50 feet)");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 2);
-  }
-  idx = get_item_idx_by_name("Tinderbox");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 10);
-  }
-
-  // --- TOOLS AND EQUIPMENT ---
-  idx = get_item_idx_by_name("Grappling Hook");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 3);
-  }
-  idx = get_item_idx_by_name("Crowbar");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 3);
-  }
-  idx = get_item_idx_by_name("Thieves' Tools");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 2);
-  }
-  idx = get_item_idx_by_name("Healer's Kit");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 5);
-  }
-  idx = get_item_idx_by_name("Antitoxin (vial)");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 5);
-  }
-  idx = get_item_idx_by_name("Acid (vial)");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 3);
-  }
-  idx = get_item_idx_by_name("Alchemist's Fire (flask)");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 3);
-  }
-
-  // --- CONTAINERS AND TRAVEL ---
-  idx = get_item_idx_by_name("Backpack");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 5);
-  }
-  idx = get_item_idx_by_name("Pouch");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 5);
-  }
-  idx = get_item_idx_by_name("Chest");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 2);
-  }
-
-  //--- WRITING AND CARTOGRAPHY ---
-  idx = get_item_idx_by_name("Ink (1 ounce bottle)");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 5);
-  }
-  idx = get_item_idx_by_name("Ink Pen");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 5);
-  }
-  idx = get_item_idx_by_name("Parchment (one sheet)");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 20);
-  }
-
-  // --- SIMPLE WEAPONS (traveler protection) ---
-  idx = get_item_idx_by_name("Dagger");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 5);
-  }
-  idx = get_item_idx_by_name("Quarterstaff");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 3);
-  }
-  idx = get_item_idx_by_name("Sling");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 3);
-  }
-  idx = get_item_idx_by_name("Sling Bullets (20)");
-  if (idx >= 0) {
-    add_item_to_shop(n, idx, 10);
-  }
-
-  //If the DB is missing key items, fallback to random filling
-  if (n->merchant.item_count < 5) {
-    fill_shop_by_specialization(n, 0);
-  }
+static void fill_provisioner_floor0(MerchantData *m) {
+    /*Light, survival and camping, tools, containers, writing, and a few
+     * simple weapons for the traveler.*/
+    static const struct {
+        const char *item;
+        int stock;
+    } k_stock[] = {
+        {"Torch", 20},
+        {"Lantern, Hooded", 5},
+        {"Lantern, Bullseye", 3},
+        {"Oil (flask)", 20},
+        {"Rations (1 day)", 20},
+        {"Waterskin", 10},
+        {"Bedroll", 5},
+        {"Rope, Hempen (50 feet)", 5},
+        {"Rope, Silk (50 feet)", 2},
+        {"Tinderbox", 10},
+        {"Grappling Hook", 3},
+        {"Crowbar", 3},
+        /*The tools 'tunnel' needs: a trap (Stone Tomb, Ceiling Collapse)
+         * or a spell can wall up the way to the stairs for good.*/
+        {"Pick, Miner's", 5},
+        {"Shovel", 5},
+        {"Thieves' Tools", 2},
+        {"Healer's Kit", 5},
+        {"Antitoxin (vial)", 5},
+        {"Acid (vial)", 3},
+        {"Alchemist's Fire (flask)", 3},
+        {"Backpack", 5},
+        {"Pouch", 5},
+        {"Chest", 2},
+        {"Ink (1 ounce bottle)", 5},
+        {"Ink Pen", 5},
+        {"Parchment (one sheet)", 20},
+        {"Dagger", 5},
+        {"Quarterstaff", 3},
+        {"Sling", 3},
+        /*Every kind of ammunition, always: the Iron Anvil stocks at random,
+         * and a ranger once found no arrows in three worlds of ten.*/
+        {"Arrows (20)", 10},
+        {"Crossbow Bolts (20)", 10},
+        {"Sling Bullets (20)", 10},
+        {"Blowgun Needles (50)", 10},
+    };
+    m->item_count = 0;
+    for (size_t i = 0; i < sizeof(k_stock) / sizeof(k_stock[0]); i++) {
+        int idx = get_item_idx_by_name(k_stock[i].item);
+        if (idx >= 0) {
+            add_item_to_shop(m, idx, k_stock[i].stock);
+        }
+    }
+    //If the DB is missing key items, fallback to random filling
+    if (m->item_count < 5) {
+        fill_shop_by_specialization(m, 0);
+    }
 }
 
 /* =========================================================================
  * Public functions
  * ========================================================================= */
 
-void spawn_city_merchants(NPC *npcs, int *next_id) {
-  int cx = MAP_CENTER_X;
-  int cy = MAP_CENTER_Y;
-
-  // We assign circular coordinates for merchants 0..4.
-  // Slot i of the 11-store ring (radius 26), same formula as map.c.
-  int coords_x[5], coords_y[5];
-  for (int i = 0; i < 5; i++) {
-      float angle = (i * (360.0f / 11.0f)) * (M_PI / 180.0f);
-      coords_x[i] = cx + (int)(cosf(angle) * 26.0f);
-      coords_y[i] = cy + (int)(sinf(angle) * 26.0f);
-  }
-
-  // 0: Weapons and Armor - The Iron Anvil
-  NPC *f = &npcs[0];
-  npc_set_active(f, true); /*merchant: no floor-cache effect*/
-  f->archetype = ARCH_MERCHANT;
-  f->entity_id = (*next_id)++;
-  f->floor_id = 0;
-  f->x = f->spawn_x = coords_x[0];
-  f->y = f->spawn_y = coords_y[0];
-  f->respawn_timer = -1;
-  f->hp = 1; //hp>0 required: the client drops entities with hp<=0
-  f->max_hp = 1;
-  f->template = &bestiary_data[0];
-  f->merchant.spec = BLACKSMITH;
-  strncpy(f->merchant.shop_name, "The Iron Anvil", 63);
-  fill_shop_by_specialization(f, 0);
-
-  // 1: Alchemy and Potions - The Bubbling Cauldron
-  NPC *p = &npcs[1];
-  npc_set_active(p, true); /*merchant: no floor-cache effect*/
-  p->archetype = ARCH_MERCHANT;
-  p->entity_id = (*next_id)++;
-  p->floor_id = 0;
-  p->x = p->spawn_x = coords_x[1];
-  p->y = p->spawn_y = coords_y[1];
-  p->respawn_timer = -1;
-  p->hp = 1; //hp>0 required: the client drops entities with hp<=0
-  p->max_hp = 1;
-  p->template = &bestiary_data[0];
-  p->merchant.spec = ALCHEMIST;
-  strncpy(p->merchant.shop_name, "The Bubbling Cauldron", 63);
-  fill_shop_by_specialization(p, 0);
-
-  // 2: General Store - The Drunken Dragon
-  NPC *o = &npcs[2];
-  npc_set_active(o, true); /*merchant: no floor-cache effect*/
-  o->archetype = ARCH_MERCHANT;
-  o->entity_id = (*next_id)++;
-  o->floor_id = 0;
-  o->x = o->spawn_x = coords_x[2];
-  o->y = o->spawn_y = coords_y[2];
-  o->respawn_timer = -1;
-  o->hp = 1; //hp>0 required: the client drops entities with hp<=0
-  o->max_hp = 1;
-  o->template = &bestiary_data[0];
-  o->merchant.spec = PROVISIONER;
-  strncpy(o->merchant.shop_name, "The Drunken Dragon", 63);
-  fill_provisioner_floor0(o);
-
-  // 3: Magic and Utility - Temple of Arcana
-  NPC *s = &npcs[3];
-  npc_set_active(s, true); /*merchant: no floor-cache effect*/
-  s->archetype = ARCH_MERCHANT;
-  s->entity_id = (*next_id)++;
-  s->floor_id = 0;
-  s->x = s->spawn_x = coords_x[3];
-  s->y = s->spawn_y = coords_y[3];
-  s->respawn_timer = -1;
-  s->hp = 1; //hp>0 required: the client drops entities with hp<=0
-  s->max_hp = 1;
-  s->template = &bestiary_data[0];
-  s->merchant.spec = MAGIC_SHOP;
-  strncpy(s->merchant.shop_name, "Temple of Arcana", 63);
-  fill_shop_by_specialization(s, 0);
-
-  // 4: Black Market - The Shadow's Edge
-  NPC *m = &npcs[4];
-  npc_set_active(m, true); /*merchant: no floor-cache effect*/
-  m->archetype = ARCH_MERCHANT;
-  m->entity_id = (*next_id)++;
-  m->floor_id = 0;
-  m->x = m->spawn_x = coords_x[4];
-  m->y = m->spawn_y = coords_y[4];
-  m->respawn_timer = -1;
-  m->hp = 1; //hp>0 required: the client drops entities with hp<=0
-  m->max_hp = 1;
-  m->template = &bestiary_data[0];
-  m->merchant.spec = BLACK_MARKET;
-  strncpy(m->merchant.shop_name, "The Shadow's Edge", 63);
-  fill_shop_by_specialization(m, 40);
-  m->merchant.restock_timer = 100;
+/*The shop of a new merchant (its entity_id is set): its trade and name.
+ * The table of shops is empty when a world is generated, so it never
+ * fails here; a merchant without one would sell nothing.*/
+static MerchantData *open_shop(Game *game, NPC *n, MerchantSpecialization spec, const char *name) {
+    static MerchantData no_shop;
+    MerchantData *m = npc_shop_new(&game->pools, game->npcs, MAX_NPCS, n);
+    if (!m) {
+        memset(&no_shop, 0, sizeof(no_shop));
+        return &no_shop;
+    }
+    m->spec = spec;
+    copy_str(m->shop_name, name, sizeof(m->shop_name));
+    return m;
 }
 
-void spawn_magic_shops(NPC *npcs, int *next_id) {
-  int cx = MAP_CENTER_X;
-  int cy = MAP_CENTER_Y;
+void spawn_city_merchants(Game *game) {
+    int cx = MAP_CENTER_X;
+    int cy = MAP_CENTER_Y;
 
-  // We assign circular coordinates for merchants 5..9.
-  // Slot i of the 11-store ring (radius 26), same formula as map.c.
-  int coords_x[5], coords_y[5];
-  for (int i = 5; i < 10; i++) {
-      float angle = (i * (360.0f / 11.0f)) * (M_PI / 180.0f);
-      coords_x[i-5] = cx + (int)(cosf(angle) * 26.0f);
-      coords_y[i-5] = cy + (int)(sinf(angle) * 26.0f);
-  }
+    // We assign circular coordinates for merchants 0..4.
+    // Slot i of the 11-store ring (radius 26), same formula as map.c.
+    int coords_x[5], coords_y[5];
+    for (int i = 0; i < 5; i++) {
+        float angle = city_shop_angle(i);
+        coords_x[i] = cx + (int)(cosf(angle) * 26.0f);
+        coords_y[i] = cy + (int)(sinf(angle) * 26.0f);
+    }
 
-  // 5: Magic and Utility - Master Xanthus
-  NPC *m = &npcs[5];
-  npc_set_active(m, true); /*merchant: no floor-cache effect*/
-  m->archetype = ARCH_MERCHANT;
-  m->entity_id = (*next_id)++;
-  m->floor_id = 0;
-  m->x = m->spawn_x = coords_x[0];
-  m->y = m->spawn_y = coords_y[0];
-  m->respawn_timer = -1;
-  m->hp = 1; //hp>0 required: the client drops entities with hp<=0
-  m->max_hp = 1;
-  m->template = &bestiary_data[0];
-  m->merchant.spec = MAGIC_SHOP;
-  strncpy(m->merchant.shop_name, "Xanthus's Arcane Curios", 63);
-  fill_shop_by_specialization(m, 20);
-  m->merchant.restock_timer = 100;
+    // 0: Weapons and Armor - The Iron Anvil
+    NPC *f = &game->npcs[0];
+    npc_set_active(game, f, true); /*merchant: no floor-cache effect*/
+    f->archetype = ARCH_MERCHANT;
+    f->entity_id = game->next_id++;
+    f->floor_id = 0;
+    f->x = f->spawn_x = coords_x[0];
+    f->y = f->spawn_y = coords_y[0];
+    f->respawn_timer = -1;
+    f->hp = 1; //hp>0 required: the client drops entities with hp<=0
+    f->max_hp = 1;
+    f->template = &bestiary_data[0];
+    MerchantData *f_shop = open_shop(game, f, BLACKSMITH, "The Iron Anvil");
+    fill_shop_by_specialization(f_shop, 0);
 
-  //6: Sanctum of Prayers - Sister Elara
-  NPC *p = &npcs[6];
-  npc_set_active(p, true); /*merchant: no floor-cache effect*/
-  p->archetype = ARCH_MERCHANT;
-  p->entity_id = (*next_id)++;
-  p->floor_id = 0;
-  p->x = p->spawn_x = coords_x[1];
-  p->y = p->spawn_y = coords_y[1];
-  p->respawn_timer = -1;
-  p->hp = 1; //hp>0 required: the client drops entities with hp<=0
-  p->max_hp = 1;
-  p->template = &bestiary_data[0];
-  p->merchant.spec = MAGIC_SHOP;
-  strncpy(p->merchant.shop_name, "Sister Elara's Sanctum", 63);
-  fill_shop_by_specialization(p, 20);
-  p->merchant.restock_timer = 100;
+    // 1: Alchemy and Potions - The Bubbling Cauldron
+    NPC *p = &game->npcs[1];
+    npc_set_active(game, p, true); /*merchant: no floor-cache effect*/
+    p->archetype = ARCH_MERCHANT;
+    p->entity_id = game->next_id++;
+    p->floor_id = 0;
+    p->x = p->spawn_x = coords_x[1];
+    p->y = p->spawn_y = coords_y[1];
+    p->respawn_timer = -1;
+    p->hp = 1; //hp>0 required: the client drops entities with hp<=0
+    p->max_hp = 1;
+    p->template = &bestiary_data[0];
+    MerchantData *p_shop = open_shop(game, p, ALCHEMIST, "The Bubbling Cauldron");
+    fill_shop_by_specialization(p_shop, 0);
 
-  // 7: Catalyst Emporium - Master Malchor
-  NPC *c = &npcs[7];
-  npc_set_active(c, true); /*merchant: no floor-cache effect*/
-  c->archetype = ARCH_MERCHANT;
-  c->entity_id = (*next_id)++;
-  c->floor_id = 0;
-  c->x = c->spawn_x = coords_x[2];
-  c->y = c->spawn_y = coords_y[2];
-  c->respawn_timer = -1;
-  c->hp = 1; //hp>0 required: the client drops entities with hp<=0
-  c->max_hp = 1;
-  c->template = &bestiary_data[0];
-  c->merchant.spec = ALCHEMIST;
-  strncpy(c->merchant.shop_name, "Master Malchor's Reagents", 63);
-  fill_shop_by_specialization(c, 20);
-  c->merchant.restock_timer = 100;
+    // 2: General Store - The Drunken Dragon
+    NPC *o = &game->npcs[2];
+    npc_set_active(game, o, true); /*merchant: no floor-cache effect*/
+    o->archetype = ARCH_MERCHANT;
+    o->entity_id = game->next_id++;
+    o->floor_id = 0;
+    o->x = o->spawn_x = coords_x[2];
+    o->y = o->spawn_y = coords_y[2];
+    o->respawn_timer = -1;
+    o->hp = 1; //hp>0 required: the client drops entities with hp<=0
+    o->max_hp = 1;
+    o->template = &bestiary_data[0];
+    MerchantData *o_shop = open_shop(game, o, PROVISIONER, "The Drunken Dragon");
+    fill_provisioner_floor0(o_shop);
 
-  // 8: Arcane Bookshop (books for mages, warlocks, etc.)
-  NPC *r = &npcs[8];
-  npc_set_active(r, true); /*merchant: no floor-cache effect*/
-  r->archetype = ARCH_MERCHANT;
-  r->entity_id = (*next_id)++;
-  r->floor_id = 0;
-  r->x = r->spawn_x = coords_x[3];
-  r->y = r->spawn_y = coords_y[3];
-  r->respawn_timer = -1;
-  r->hp = 1; //hp>0 required: the client drops entities with hp<=0
-  r->max_hp = 1;
-  r->template = &bestiary_data[0];
-  r->merchant.spec = BOOKS_MAGE;
-  strncpy(r->merchant.shop_name, "The Arcane Library", 63);
-  fill_shop_by_specialization(r, 100);
-  r->merchant.restock_timer = 100;
+    // 3: Magic and Utility - Temple of Arcana
+    NPC *s = &game->npcs[3];
+    npc_set_active(game, s, true); /*merchant: no floor-cache effect*/
+    s->archetype = ARCH_MERCHANT;
+    s->entity_id = game->next_id++;
+    s->floor_id = 0;
+    s->x = s->spawn_x = coords_x[3];
+    s->y = s->spawn_y = coords_y[3];
+    s->respawn_timer = -1;
+    s->hp = 1; //hp>0 required: the client drops entities with hp<=0
+    s->max_hp = 1;
+    s->template = &bestiary_data[0];
+    MerchantData *s_shop = open_shop(game, s, MAGIC_SHOP, "Temple of Arcana");
+    fill_shop_by_specialization(s_shop, 0);
 
-  // 9: Temple Library (books of clerics, druids, etc.)
-  NPC *b = &npcs[9];
-  npc_set_active(b, true); /*merchant: no floor-cache effect*/
-  b->archetype = ARCH_MERCHANT;
-  b->entity_id = (*next_id)++;
-  b->floor_id = 0;
-  b->x = b->spawn_x = coords_x[4];
-  b->y = b->spawn_y = coords_y[4];
-  b->respawn_timer = -1;
-  b->hp = 1; //hp>0 required: the client drops entities with hp<=0
-  b->max_hp = 1;
-  b->template = &bestiary_data[0];
-  b->merchant.spec = BOOKS_PRIEST;
-  strncpy(b->merchant.shop_name, "Temple Library", 63);
-  fill_shop_by_specialization(b, 100);
-  b->merchant.restock_timer = 100;
+    // 4: Black Market - The Shadow's Edge
+    NPC *m = &game->npcs[4];
+    npc_set_active(game, m, true); /*merchant: no floor-cache effect*/
+    m->archetype = ARCH_MERCHANT;
+    m->entity_id = game->next_id++;
+    m->floor_id = 0;
+    m->x = m->spawn_x = coords_x[4];
+    m->y = m->spawn_y = coords_y[4];
+    m->respawn_timer = -1;
+    m->hp = 1; //hp>0 required: the client drops entities with hp<=0
+    m->max_hp = 1;
+    m->template = &bestiary_data[0];
+    MerchantData *m_shop = open_shop(game, m, BLACK_MARKET, "The Shadow's Edge");
+    fill_shop_by_specialization(m_shop, 40);
+    m_shop->restock_timer = MERCHANT_RESTOCK_ROUNDS;
+}
+
+void spawn_magic_shops(Game *game) {
+    int cx = MAP_CENTER_X;
+    int cy = MAP_CENTER_Y;
+
+    // We assign circular coordinates for merchants 5..9.
+    // Slot i of the 11-store ring (radius 26), same formula as map.c.
+    int coords_x[5], coords_y[5];
+    for (int i = 5; i < 10; i++) {
+        float angle = city_shop_angle(i);
+        coords_x[i - 5] = cx + (int)(cosf(angle) * 26.0f);
+        coords_y[i - 5] = cy + (int)(sinf(angle) * 26.0f);
+    }
+
+    // 5: Magic and Utility - Master Xanthus
+    NPC *m = &game->npcs[5];
+    npc_set_active(game, m, true); /*merchant: no floor-cache effect*/
+    m->archetype = ARCH_MERCHANT;
+    m->entity_id = game->next_id++;
+    m->floor_id = 0;
+    m->x = m->spawn_x = coords_x[0];
+    m->y = m->spawn_y = coords_y[0];
+    m->respawn_timer = -1;
+    m->hp = 1; //hp>0 required: the client drops entities with hp<=0
+    m->max_hp = 1;
+    m->template = &bestiary_data[0];
+    MerchantData *m_shop = open_shop(game, m, MAGIC_SHOP, "Xanthus's Arcane Curios");
+    fill_shop_by_specialization(m_shop, 20);
+    m_shop->restock_timer = MERCHANT_RESTOCK_ROUNDS;
+
+    //6: Sanctum of Prayers - Sister Elara
+    NPC *p = &game->npcs[6];
+    npc_set_active(game, p, true); /*merchant: no floor-cache effect*/
+    p->archetype = ARCH_MERCHANT;
+    p->entity_id = game->next_id++;
+    p->floor_id = 0;
+    p->x = p->spawn_x = coords_x[1];
+    p->y = p->spawn_y = coords_y[1];
+    p->respawn_timer = -1;
+    p->hp = 1; //hp>0 required: the client drops entities with hp<=0
+    p->max_hp = 1;
+    p->template = &bestiary_data[0];
+    MerchantData *p_shop = open_shop(game, p, MAGIC_SHOP, "Sister Elara's Sanctum");
+    fill_shop_by_specialization(p_shop, 20);
+    p_shop->restock_timer = MERCHANT_RESTOCK_ROUNDS;
+
+    // 7: Catalyst Emporium - Master Malchor
+    NPC *c = &game->npcs[7];
+    npc_set_active(game, c, true); /*merchant: no floor-cache effect*/
+    c->archetype = ARCH_MERCHANT;
+    c->entity_id = game->next_id++;
+    c->floor_id = 0;
+    c->x = c->spawn_x = coords_x[2];
+    c->y = c->spawn_y = coords_y[2];
+    c->respawn_timer = -1;
+    c->hp = 1; //hp>0 required: the client drops entities with hp<=0
+    c->max_hp = 1;
+    c->template = &bestiary_data[0];
+    MerchantData *c_shop = open_shop(game, c, ALCHEMIST, "Master Malchor's Reagents");
+    fill_shop_by_specialization(c_shop, 20);
+    c_shop->restock_timer = MERCHANT_RESTOCK_ROUNDS;
+
+    // 8: Arcane Bookshop (books for mages, warlocks, etc.)
+    NPC *r = &game->npcs[8];
+    npc_set_active(game, r, true); /*merchant: no floor-cache effect*/
+    r->archetype = ARCH_MERCHANT;
+    r->entity_id = game->next_id++;
+    r->floor_id = 0;
+    r->x = r->spawn_x = coords_x[3];
+    r->y = r->spawn_y = coords_y[3];
+    r->respawn_timer = -1;
+    r->hp = 1; //hp>0 required: the client drops entities with hp<=0
+    r->max_hp = 1;
+    r->template = &bestiary_data[0];
+    MerchantData *r_shop = open_shop(game, r, BOOKS_MAGE, "The Arcane Library");
+    fill_shop_by_specialization(r_shop, 100);
+    r_shop->restock_timer = MERCHANT_RESTOCK_ROUNDS;
+
+    // 9: Temple Library (books of clerics, druids, etc.)
+    NPC *b = &game->npcs[9];
+    npc_set_active(game, b, true); /*merchant: no floor-cache effect*/
+    b->archetype = ARCH_MERCHANT;
+    b->entity_id = game->next_id++;
+    b->floor_id = 0;
+    b->x = b->spawn_x = coords_x[4];
+    b->y = b->spawn_y = coords_y[4];
+    b->respawn_timer = -1;
+    b->hp = 1; //hp>0 required: the client drops entities with hp<=0
+    b->max_hp = 1;
+    b->template = &bestiary_data[0];
+    MerchantData *b_shop = open_shop(game, b, BOOKS_PRIEST, "Temple Library");
+    fill_shop_by_specialization(b_shop, 100);
+    b_shop->restock_timer = MERCHANT_RESTOCK_ROUNDS;
 }
 
 /* =========================================================================
@@ -555,315 +487,269 @@ void spawn_magic_shops(NPC *npcs, int *next_id) {
  * built by the same generic shop loop as the other ten stores.
  * Occupies NPC slot 10.
  * ========================================================================= */
-void spawn_martial_archive(NPC *npcs, int *next_id) {
-  int cx = MAP_CENTER_X;
-  int cy = MAP_CENTER_Y;
-  // Slot 10 of the 11-store ring (radius 26), same formula as map.c
-  float angle = (10 * (360.0f / 11.0f)) * (M_PI / 180.0f);
-  int ax = cx + (int)(cosf(angle) * 26.0f);
-  int ay = cy + (int)(sinf(angle) * 26.0f);
+void spawn_martial_archive(Game *game) {
+    int cx = MAP_CENTER_X;
+    int cy = MAP_CENTER_Y;
+    // Slot 10 of the 11-store ring (radius 26), same formula as map.c
+    float angle = city_shop_angle(10);
+    int ax = cx + (int)(cosf(angle) * 26.0f);
+    int ay = cy + (int)(sinf(angle) * 26.0f);
 
-  NPC *a = &npcs[10];
-  npc_set_active(a, true); /*merchant: no floor-cache effect*/
-  a->archetype = ARCH_MERCHANT;
-  a->entity_id = (*next_id)++;
-  a->floor_id = 0;
-  a->x = a->spawn_x = ax;
-  a->y = a->spawn_y = ay;
-  a->respawn_timer = -1;
-  a->hp = 1; //hp>0 required: the client drops entities with hp<=0
-  a->max_hp = 1;
-  a->template = &bestiary_data[0];
-  a->merchant.spec = BOOKS_MARTIAL;
-  strncpy(a->merchant.shop_name, "The Archive of a Thousand Battles", 63);
-  fill_shop_by_specialization(a, 100);
-  a->merchant.restock_timer = 100;
+    NPC *a = &game->npcs[10];
+    npc_set_active(game, a, true); /*merchant: no floor-cache effect*/
+    a->archetype = ARCH_MERCHANT;
+    a->entity_id = game->next_id++;
+    a->floor_id = 0;
+    a->x = a->spawn_x = ax;
+    a->y = a->spawn_y = ay;
+    a->respawn_timer = -1;
+    a->hp = 1; //hp>0 required: the client drops entities with hp<=0
+    a->max_hp = 1;
+    a->template = &bestiary_data[0];
+    MerchantData *a_shop = open_shop(game, a, BOOKS_MARTIAL, "The Archive of a Thousand Battles");
+    fill_shop_by_specialization(a_shop, 100);
+    a_shop->restock_timer = MERCHANT_RESTOCK_ROUNDS;
 }
 
-void populate_dungeons(NPC *npcs, int *next_id) {
-  int npc_idx = 11; // The 11 city merchants occupy slots 0-10
+/*Tiles a creature must be able to reach from where it is placed.*/
+#define SPAWN_MIN_REGION 20
 
-
-
-  //--- POPULATION OF FLOORS ---
-  for (int f = 1; f < MAX_FLOORS; f++) {
-
-    // --- GHOST/BONES SYSTEM ---
-    char fname[128];
-    snprintf(fname, sizeof(fname), "data/bones_%d.dat", f);
-    FILE *bfile = fopen(fname, "rb");
-    if (bfile) {
-      BonesData b;
-      if (fread(&b, sizeof(BonesData), 1, bfile) == 1) {
-        if (npc_idx < MAX_NPCS) {
-          NPC *g = &npcs[npc_idx++];
-          /*active is set at the END of this block (after the template is
-           *chosen) through npc_set_active: the helper must see the FINAL
-           *fields to update the floor cache correctly (A2).*/
-          g->archetype = ARCH_BOSS;
-          g->entity_id = (*next_id)++;
-          g->floor_id = f;
-          g->x = b.x;
-          g->y = b.y;
-          g->spawn_x = b.x;
-          g->spawn_y = b.y;
-          g->template = &bestiary_data[0];
-          //Look for a Ghost/Wraith/Spirit template in the bestiary
-          for (int i = 0; i < bestiary_size; i++) {
-            if (strcasestr(bestiary_data[i].name, "Ghost") ||
-                strcasestr(bestiary_data[i].name, "Wraith") ||
-                strcasestr(bestiary_data[i].name, "Spirit")) {
-              g->template = &bestiary_data[i];
-              break;
+/*True if at least SPAWN_MIN_REGION passable tiles join (x, y) in the four
+ * directions monsters walk: room walls drawn on the diagonal leave cells
+ * that only a diagonal touches, where a creature could never move.*/
+static bool spawn_region_open(const Floor *fl, int x, int y) {
+    int qx[SPAWN_MIN_REGION], qy[SPAWN_MIN_REGION];
+    int n = 0;
+    qx[n] = x;
+    qy[n++] = y;
+    for (int head = 0; head < n && n < SPAWN_MIN_REGION; head++) {
+        static const int dx[4] = {1, -1, 0, 0}, dy[4] = {0, 0, 1, -1};
+        for (int d = 0; d < 4 && n < SPAWN_MIN_REGION; d++) {
+            int nx = qx[head] + dx[d], ny = qy[head] + dy[d];
+            if (nx < 1 || ny < 1 || nx >= MAP_WIDTH - 1 || ny >= MAP_HEIGHT - 1 ||
+                !voxel_passable(fl->map.data[0][ny][nx])) {
+                continue;
             }
-          }
-          g->hp = 250;
-          g->max_hp = 250;
-          g->is_ghost = true;
-          strncpy(g->custom_name, b.name, sizeof(g->custom_name) - 1);
-          for (int i = 0; i < 30; i++) {
-            g->ghost_loot[i].template_idx = b.items[i];
-            g->ghost_loot[i].stack_count = b.amounts[i];
-          }
-          ai_init_npc(g, g->template->name, g->floor_id);
-          npc_set_active(g, true);
+            bool seen = false;
+            for (int k = 0; k < n && !seen; k++) {
+                seen = qx[k] == nx && qy[k] == ny;
+            }
+            if (!seen) {
+                qx[n] = nx;
+                qy[n++] = ny;
+            }
         }
-      }
-      fclose(bfile);
-      remove(fname); //Removed: Spawns only once
     }
+    return n >= SPAWN_MIN_REGION;
+}
 
-
-    //--- MONSTER SELECTION filtered by floor_min/floor_max ---
-    //Builds a pool of monsters suited to this floor
-    int *floor_pool = NULL;
-    int pool_size = 0;
-    for (int bi = 0; bi < bestiary_size; bi++) {
-      if (f >= bestiary_data[bi].floor_min && f <= bestiary_data[bi].floor_max) {
-        pool_size++;
-      }
-    }
-    if (pool_size > 0) {
-      floor_pool = malloc(pool_size * sizeof(int));
-      int pi = 0;
-      for (int bi = 0; bi < bestiary_size; bi++) {
-        if (f >= bestiary_data[bi].floor_min && f <= bestiary_data[bi].floor_max) {
-          floor_pool[pi++] = bi;
+/*A random tile of open ground (voxel_is_ground) with nobody on it, from
+ * which a creature can walk away, in 200 tries; false if none was found.*/
+static bool random_spawn_tile(Game *game, int f, int *x, int *y) {
+    const Floor *fl = &game->world->floors[f];
+    for (int tries = 0; tries < 200; tries++) {
+        int tx = 1 + rand() % (MAP_WIDTH - 2);
+        int ty = 1 + rand() % (MAP_HEIGHT - 2);
+        if (voxel_is_ground(fl->map.data[0][ty][tx]) && fl->entity_grid[ty][tx] == 0 &&
+            spawn_region_open(fl, tx, ty)) {
+            *x = tx;
+            *y = ty;
+            return true;
         }
-      }
     }
+    return false;
+}
 
-    //--- BOSS FLOOR (every 10 floors) ---
-    if (f > 0 && f % 10 == 0) {
-      if (pool_size > 0 && npc_idx < MAX_NPCS) {
-        int r_idx = rand() % pool_size;
-        int boss_id = floor_pool[r_idx];
+static bool is_boss_template(const MonsterTemplate *m) {
+    return m->archetype && strcasecmp(m->archetype, "boss") == 0;
+}
 
-        NPC *b = &npcs[npc_idx++];
-        /*active is set at the END of this block (after the template is
-         *assigned) through npc_set_active — see the ghost block above.*/
-        b->archetype = ARCH_BOSS;
-        b->entity_id = (*next_id)++;
-        b->floor_id = f;
-        b->x = MAP_CENTER_X;
-        b->y = MAP_CENTER_Y;
-        b->spawn_x = MAP_CENTER_X;
-        b->spawn_y = MAP_CENTER_Y;
-        b->respawn_timer = 0;
-        b->template = &bestiary_data[boss_id];
-        
-        //Appropriate sizing of the boss
-        b->hp = b->template->hp_avg * 5 + (f * 50);
-        b->max_hp = b->hp;
-        
-        //Let's name it "Boss"
-        snprintf(b->custom_name, sizeof(b->custom_name), "Boss %s", b->template->name);
-        
-        ai_init_npc(b, b->custom_name, b->floor_id);
-        npc_set_active(b, true);
-      }
-      if (floor_pool) free(floor_pool);
-      continue; //Boss floors only have the boss
+/*The bestiary entries whose floor range holds f: the guardians ("boss" in
+ * the data) for a boss floor, every other creature for the rest. When the
+ * range holds none of the kind, any creature of the range. The caller
+ * frees the array (NULL when *size is 0).*/
+static int *floor_monster_pool(int f, bool bosses, int *size) {
+    int *pool = malloc((size_t)(bestiary_size > 0 ? bestiary_size : 1) * sizeof(int));
+    *size = 0;
+    for (int pass = 0; pool && pass < 2 && *size == 0; pass++) {
+        for (int bi = 0; bi < bestiary_size; bi++) {
+            const MonsterTemplate *m = &bestiary_data[bi];
+            if (f >= m->floor_min && f <= m->floor_max &&
+                (pass == 1 || is_boss_template(m) == bosses)) {
+                pool[(*size)++] = bi;
+            }
+        }
     }
+    if (*size == 0) {
+        free(pool);
+        return NULL;
+    }
+    return pool;
+}
 
+/*Fields shared by every new NPC of the dungeon; activation comes last,
+ * by the caller, once template and archetype are final. The tile is taken
+ * at once, so the next spawn does not land on it.*/
+static NPC *dungeon_npc(Game *game, int *npc_idx, int f, int x, int y) {
+    NPC *n = &game->npcs[(*npc_idx)++];
+    n->entity_id = game->next_id++;
+    n->floor_id = f;
+    n->x = n->spawn_x = x;
+    n->y = n->spawn_y = y;
+    n->respawn_timer = 0;
+    game->world->floors[f].entity_grid[y][x] = n->entity_id;
+    return n;
+}
 
-    //--- SPAWN MONSTERS on the floor ---
-    //Map 300x300 = 90000 tiles. Fewer monsters to avoid exceeding MAX_NPCS
-    int num_monsters = 100 + (f * 4); 
+/*The nearest free open ground to (ax, ay), ring by ring up to radius; false
+ * if there is none.*/
+static bool free_ground_near(const Floor *fl, int ax, int ay, int radius, int *ox, int *oy) {
+    for (int r = 0; r <= radius; r++) {
+        for (int dy = -r; dy <= r; dy++) {
+            for (int dx = -r; dx <= r; dx++) {
+                int x = ax + dx, y = ay + dy;
+                if ((abs(dx) != r && abs(dy) != r) || x < 1 || y < 1 || x >= MAP_WIDTH - 1 ||
+                    y >= MAP_HEIGHT - 1) {
+                    continue;
+                }
+                if (voxel_is_ground(fl->map.data[0][y][x]) && fl->entity_grid[y][x] == 0 &&
+                    spawn_region_open(fl, x, y)) {
+                    *ox = x;
+                    *oy = y;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+bool spawn_floor_boss(Game *game, NPC *b, int f) {
+    int size = 0;
+    int *pool = floor_monster_pool(f, true, &size);
+    int bx, by;
+    if (!pool || !free_ground_near(&game->world->floors[f], MAP_CENTER_X, MAP_CENTER_Y,
+                                   MAP_WIDTH / 2, &bx, &by)) {
+        free(pool);
+        return false;
+    }
+    int boss_id = pool[rand() % size];
+    free(pool);
+    memset(b, 0, sizeof(*b));
+    b->entity_id = game->next_id++;
+    b->floor_id = f;
+    b->x = b->spawn_x = bx;
+    b->y = b->spawn_y = by;
+    b->archetype = ARCH_BOSS;
+    /*template_idx is what a restart and a respawn read the template from.*/
+    b->template_idx = boss_id;
+    b->template = &bestiary_data[boss_id];
+    snprintf(b->custom_name, sizeof(b->custom_name), "Boss %s", b->template->name);
+    /*Half the base hit points more per block of 10 floors: ai_init_npc.*/
+    ai_init_npc(b, b->custom_name, b->floor_id);
+    game->world->floors[f].entity_grid[by][bx] = b->entity_id;
+    npc_set_active(game, b, true);
+    return true;
+}
+
+/*100 monsters, 4 more per floor (at most 300), of the floor's pool.*/
+static void spawn_monsters(Game *game, int *npc_idx, int f, const int *pool, int size) {
+    int num_monsters = 100 + (f * 4);
     if (num_monsters > 300) {
-      num_monsters = 300;
+        num_monsters = 300;
     }
-
-    for (int m = 0; m < num_monsters; m++) {
-      if (npc_idx >= MAX_NPCS) {
-        break;
-      }
-
-      //Find a valid VOXEL_FLOOR tile
-      int px = -1;
-      int py = -1;
-      for (int tries = 0; tries < 100; tries++) {
-        int tx = rand() % MAP_WIDTH;
-        int ty = rand() % MAP_HEIGHT;
-        VoxelType v = master_world->floors[f].map.data[0][ty][tx];
-        if (v == VOXEL_FLOOR || v == VOXEL_WOOD || v == VOXEL_SAND || 
-            v == VOXEL_MUD || v == VOXEL_ICE || v == VOXEL_GRASS || 
-            v == VOXEL_COBBLE || v == VOXEL_MARBLE || v == VOXEL_ASH) {
-          px = tx;
-          py = ty;
-          break;
+    for (int m = 0; size > 0 && m < num_monsters && *npc_idx < MAX_NPCS; m++) {
+        int px, py;
+        if (!random_spawn_tile(game, f, &px, &py)) {
+            continue;
         }
-      }
-
-      if (px != -1) {
-        int t_id;
-        if (floor_pool && pool_size > 0) {
-          t_id = floor_pool[rand() % pool_size];
-        } else {
-          t_id = rand() % bestiary_size;
-        }
-
-        NPC *n = &npcs[npc_idx++];
-        /*active is set at the END of this block (after the template is
-         *assigned) through npc_set_active — see the ghost block above.*/
-        n->archetype = ARCH_MELEE; //ai_init refines it
-        n->entity_id = (*next_id)++;
-        n->floor_id = f;
-        n->x = px;
-        n->y = py;
-        n->spawn_x = px;
-        n->spawn_y = py;
-        n->respawn_timer = 0;
+        int t_id = pool[rand() % size];
+        NPC *n = dungeon_npc(game, npc_idx, f, px, py);
+        n->archetype = ARCH_MELEE; /*ai_init_npc refines it*/
         n->template_idx = t_id;
         n->template = &bestiary_data[t_id];
         n->effect_count = 0;
         n->morale = 0;
-        //ai_init_npc calculates hp, max_hp, ac, attack_bonus, damage dice
-        //and assign archetype + behavior tree based on the monster name
+        /*hp, AC, attack, damage dice, archetype and behavior from the template*/
         ai_init_npc(n, n->template->name, n->floor_id);
-        npc_set_active(n, true);
-      }
+        npc_set_active(game, n, true);
     }
+}
 
-    if (floor_pool) {
-      free(floor_pool);
-    }
-
-    //--- LOOT on the floor: Heaps of Gold and Chests ---
+/*15 piles, 2 more per floor: one in four is a chest (its item is rolled
+ * when it is opened), the others gold that scales with the depth.*/
+static void spawn_treasures(Game *game, int *npc_idx, int f) {
     int num_treasures = 15 + (f * 2);
-    for (int c_idx = 0; c_idx < num_treasures; c_idx++) {
-      if (npc_idx >= MAX_NPCS) {
-        break;
-      }
-      int lx = -1;
-      int ly = -1;
-      for (int tries = 0; tries < 100; tries++) {
-        int tx = rand() % MAP_WIDTH;
-        int ty = rand() % MAP_HEIGHT;
-        VoxelType v = master_world->floors[f].map.data[0][ty][tx];
-        if (v == VOXEL_FLOOR || v == VOXEL_WOOD || v == VOXEL_SAND || 
-            v == VOXEL_MUD || v == VOXEL_ICE || v == VOXEL_GRASS || 
-            v == VOXEL_COBBLE || v == VOXEL_MARBLE || v == VOXEL_ASH) {
-          lx = tx;
-          ly = ty;
-          break;
+    for (int i = 0; i < num_treasures && *npc_idx < MAX_NPCS; i++) {
+        int lx, ly;
+        if (!random_spawn_tile(game, f, &lx, &ly)) {
+            continue;
         }
-      }
-      if (lx != -1) {
-        NPC *s = &npcs[npc_idx++];
-        s->entity_id = (*next_id)++;
-        s->floor_id = f;
-        s->x = lx;
-        s->y = ly;
-        s->spawn_x = lx;
-        s->spawn_y = ly;
-        s->respawn_timer = 0;
+        NPC *s = dungeon_npc(game, npc_idx, f, lx, ly);
         s->template_idx = -1;
-        s->template = NULL; //No template, so it doesn't respawn as a monster
+        s->template = NULL; /*no template: it never respawns as a monster*/
         s->hp = 9999;
         s->max_hp = 9999;
-        /*template==NULL: not counted by the floor cache, but the
-         *activation still goes through the single entry point (A2).*/
-        npc_set_active(s, true);
-
         if (rand() % 4 == 0) {
-          s->archetype = ARCH_TREASURE;
-          s->gold_drop = 0; //Items are generated upon pickup
+            s->archetype = ARCH_TREASURE;
+            s->gold_drop = 0;
         } else {
-          s->archetype = ARCH_GOLD;
-          s->gold_drop = 50 + (rand() % (100 * f)); // Scales with depth
+            s->archetype = ARCH_GOLD;
+            s->gold_drop = 50 + (rand() % (100 * f));
         }
-      }
+        npc_set_active(game, s, true);
     }
+}
 
-    //--- WANDERING MERCHANT every 5 floors ---
-    if (f % 5 == 0 && npc_idx < MAX_NPCS) {
-      int lx = -1;
-      int ly = -1;
-      for (int tries = 0; tries < 100; tries++) {
-        int tx = rand() % MAP_WIDTH;
-        int ty = rand() % MAP_HEIGHT;
-        if (master_world->floors[f].map.data[0][ty][tx] == VOXEL_FLOOR) {
-          lx = tx;
-          ly = ty;
-          break;
-        }
-      }
-      if (lx != -1) {
-        NPC *s = &npcs[npc_idx++];
-        npc_set_active(s, true); /*merchant: no floor-cache effect*/
-        s->archetype = ARCH_MERCHANT;
-        s->entity_id = (*next_id)++;
-        s->floor_id = f;
-        s->x = lx;
-        s->y = ly;
-        s->spawn_x = lx;
-        s->spawn_y = ly;
-        s->respawn_timer = -1;
-        s->template_idx = 0;
-        s->template = &bestiary_data[0];
-        s->hp = 1;
-        s->max_hp = 1;
-        s->merchant.restock_timer = 100;
-
-        //Asset-based variety: picks from almost all available specializations
-        int roll = rand() % 8;
-        switch (roll) {
-        case 0:
-          s->merchant.spec = BLACKSMITH;
-          strncpy(s->merchant.shop_name, "Errant Blacksmith", 63);
-          break;
-        case 1:
-          s->merchant.spec = ALCHEMIST;
-          strncpy(s->merchant.shop_name, "Hidden Alchemist", 63);
-          break;
-        case 2:
-          s->merchant.spec = SCROLLS;
-          strncpy(s->merchant.shop_name, "Scroll Peddler", 63);
-          break;
-        case 3:
-          s->merchant.spec = WANDS_STAFFS;
-          strncpy(s->merchant.shop_name, "Wand Weaver", 63);
-          break;
-        case 4:
-          s->merchant.spec = JEWELRY;
-          strncpy(s->merchant.shop_name, "Glimmering Trader", 63);
-          break;
-        case 5:
-          s->merchant.spec = MAGIC_SHOP;
-          strncpy(s->merchant.shop_name, "Arcane Smuggler", 63);
-          break;
-        case 6:
-          s->merchant.spec = PROVISIONER;
-          strncpy(s->merchant.shop_name, "Walking Provisioner", 63);
-          break;
-        case 7:
-          s->merchant.spec = BLACK_MARKET;
-          strncpy(s->merchant.shop_name, "Shadow Dealer", 63);
-          break;
-        }
-        fill_shop_by_specialization(s, f);
-      }
+/*A wandering merchant of a random trade, on open ground (it looked for
+ * stone floor only, which most biomes do not have: no merchant came).*/
+static void spawn_wandering_merchant(Game *game, int *npc_idx, int f) {
+    static const struct {
+        MerchantSpecialization spec;
+        const char *shop_name;
+    } k_trades[8] = {
+        {BLACKSMITH, "Errant Blacksmith"},    {ALCHEMIST, "Hidden Alchemist"},
+        {SCROLLS, "Scroll Peddler"},          {WANDS_STAFFS, "Wand Weaver"},
+        {JEWELRY, "Glimmering Trader"},       {MAGIC_SHOP, "Arcane Smuggler"},
+        {PROVISIONER, "Walking Provisioner"}, {BLACK_MARKET, "Shadow Dealer"},
+    };
+    int lx, ly;
+    if (*npc_idx >= MAX_NPCS || !random_spawn_tile(game, f, &lx, &ly)) {
+        return;
     }
-  }
+    NPC *s = dungeon_npc(game, npc_idx, f, lx, ly);
+    s->archetype = ARCH_MERCHANT;
+    s->respawn_timer = -1;
+    s->template_idx = 0;
+    s->template = &bestiary_data[0];
+    s->hp = 1;
+    s->max_hp = 1;
+    int trade = rand() % 8;
+    MerchantData *s_shop = open_shop(game, s, k_trades[trade].spec, k_trades[trade].shop_name);
+    s_shop->restock_timer = MERCHANT_RESTOCK_ROUNDS;
+    npc_set_active(game, s, true); /*merchant: no floor-cache effect*/
+    fill_shop_by_specialization(s_shop, f);
+}
+
+/*Populates every dungeon floor of a new world: a boss alone on every
+ * tenth floor; elsewhere monsters, gold and chests, and a wandering
+ * merchant on every fifth floor.*/
+void populate_dungeons(Game *game) {
+    int npc_idx = 11; // The 11 city merchants occupy slots 0-10
+    for (int f = 1; f < MAX_FLOORS; f++) {
+        if (f % 10 == 0) {
+            if (npc_idx < MAX_NPCS && spawn_floor_boss(game, &game->npcs[npc_idx], f)) {
+                npc_idx++;
+            }
+            continue;
+        }
+        int pool_size = 0;
+        int *floor_pool = floor_monster_pool(f, false, &pool_size);
+        spawn_monsters(game, &npc_idx, f, floor_pool, pool_size);
+        spawn_treasures(game, &npc_idx, f);
+        if (f % 5 == 0) {
+            spawn_wandering_merchant(game, &npc_idx, f);
+        }
+        free(floor_pool);
+    }
 }
