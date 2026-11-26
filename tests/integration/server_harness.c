@@ -1372,6 +1372,7 @@ static const TestCase k_tests[] = {
     {"shop_no_arbitrage", test_shop_no_arbitrage},
     {"ammunition_bundles", test_ammunition_bundles},
     {"shop_reactive_prices", test_shop_reactive_prices},
+    {"shop_list_no_dice", test_shop_list_no_dice},
     {"shop_needs_a_merchant", test_shop_needs_a_merchant},
     {"wear_cursed_stays", test_wear_cursed_stays},
     {"merchant_restocks", test_merchant_restocks},

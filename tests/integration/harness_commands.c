@@ -255,6 +255,20 @@ int test_ammunition_bundles(void) {
     return 0;
 }
 
+/* A weapon with no damage dice (the Net, ammunition) lists "-" in the
+ * shop, not "0d0 dmg". */
+int test_shop_list_no_dice(void) {
+    Client *c = adventurer();
+    int net = item_named("Net");
+    CHECK(c && net >= 0 && item_database[net].damage_dice_count == 0,
+          "no player or no weapon without dice");
+    merchant_at(CX + 1, CY, net, 4);
+    run(c, "list");
+    CHECK(said("Net"), "the Net is not listed");
+    CHECK(!said("0d0"), "a weapon without dice listed as 0d0 dmg");
+    return 0;
+}
+
 /* LORE.md, Reactive Economy: economy_modifier = 0.5 + 1.5 * (1 - stock /
  * max_stock): half the cost on a full shelf, double on an empty one; the
  * list shows the price 'buy' asks. */
