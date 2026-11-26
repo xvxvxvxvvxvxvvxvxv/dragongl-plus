@@ -445,7 +445,7 @@ static bool cmd_dm_spawn_boss(Client *c, const char *cmd, Game *game) {
         return true;
     }
 
-    send_text_to_client(c->sock, "[DM] Boss %s (Entity %d) successfully spawned on floor %d!",
+    send_text_to_client(c->sock, "[DM] %s (Entity %d) successfully spawned on floor %d!",
                         b->custom_name, b->entity_id, target_floor);
     return true;
 }
