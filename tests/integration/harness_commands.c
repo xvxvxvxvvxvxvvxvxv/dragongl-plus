@@ -391,6 +391,39 @@ int test_wear_cursed_stays(void) {
     return 0;
 }
 
+/* The DragonGL+ client takes an item off by its slot name: the name it
+ * shows ("Torch (100/100 light turns)", "??? (unknown)") is not the item's
+ * own name, and 'takeoff' does not find the item by it. */
+int test_takeoff_by_slot_name(void) {
+    Client *c = adventurer();
+    int torch = item_named("Torch");
+    int armor = item_of(ITEM_ARMOR, 1);
+    CHECK(c && torch >= 0 && armor >= 0, "no player, no torch or no armor");
+    c->slot_hand_l.template_idx = torch;
+    c->slot_hand_l.stack_count = 1;
+    c->slot_hand_l.durability = 100;
+    c->slot_hand_l.is_identified = true;
+    c->slot_hand_l.blessing = BLESS_NORMAL;
+    c->slot_hand_l.quality = QUALITY_NORMAL;
+    char shown[128], line[160];
+    get_full_item_name(&c->slot_hand_l, shown, sizeof(shown));
+    snprintf(line, sizeof(line), "takeoff %s", shown);
+    run(c, line);
+    CHECK(c->slot_hand_l.template_idx == torch, "the torch came off by its shown name");
+    run(c, "takeoff hand_l");
+    CHECK(c->slot_hand_l.template_idx == -1 && c->backpack_count == 1,
+          "the torch did not come off by its slot name");
+    c->slot_body.template_idx = armor;
+    c->slot_body.stack_count = 1;
+    c->slot_body.is_identified = false;
+    c->slot_body.blessing = BLESS_NORMAL;
+    c->slot_body.quality = QUALITY_NORMAL;
+    run(c, "takeoff body");
+    CHECK(c->slot_body.template_idx == -1 && c->backpack_count == 2,
+          "an unidentified armor did not come off by its slot name");
+    return 0;
+}
+
 /* --- World ---------------------------------------------------------------------- */
 
 /* Floor 20 was solid rock: no room, no stairs, no way further down. */
