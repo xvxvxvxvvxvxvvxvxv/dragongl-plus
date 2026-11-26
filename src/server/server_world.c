@@ -32,175 +32,26 @@
  *   - Persistent AoE cloud updates
  */
 
-#include "server_ui_sync.h"
+#include "server_plus.h"
 #include "server_world.h"
+#include "ground_journal.h"
+#include "item_effects.h"
 #include "server_internal.h"
 #include "ai.h"
 #include "aoe.h"
-#include "combat_log.h"
-#include "rules.h"
-#include "../../include/protocol.h"
-
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
+#include "player.h"
+#include "server_log.h"
+#include "server_tiles.h"
+#include "server_combat.h"
+#include <limits.h>
 
 /*Energy threshold for NPC action in the Speed/Tick System*/
 #define ENERGY_THRESHOLD 10
 
-/*============================================================================
- * Floor Stats Cache — updated incrementally to O(1)
- *
- * Instead of scanning all 50,000 NPCs for each floor on every check
- * density scans (O(N×M)), we maintain per-floor counters updated in O(1)
- * at each NPC event (death, respawn, spawn).
- * ==========================================================================*/
-typedef struct {
-    int total;  /*Total NPCs allocated on this floor (non-merchants)*/
-    int active; /*Active (living) NPCs on this floor*/
-} FloorStats;
-
-/*Global cache: one counter per floor + one slot for excluded merchants*/
-static FloorStats g_floor_stats[MAX_FLOORS];
-static bool       g_floor_stats_dirty = true; /* Force cache rebuild on the first tick */
-
-/*Completely rebuilds cache (called only once at startup
-* and after a load from file). Cost: O(N) one-off.*/
-void floor_stats_rebuild(NPC *npcs) {
-    for (int f = 0; f < MAX_FLOORS; f++) {
-        g_floor_stats[f].total  = 0;
-        g_floor_stats[f].active = 0;
-    }
-    for (int i = 0; i < MAX_NPCS; i++) {
-        if (npcs[i].template == NULL) {
-            continue;
-        }
-        if (npcs[i].archetype == ARCH_MERCHANT) {
-            continue;
-        }
-        if (npcs[i].respawn_timer < 0) {
-            continue;
-        }
-        int f = npcs[i].floor_id;
-        if (f < 0 || f >= MAX_FLOORS) {
-            continue;
-        }
-        g_floor_stats[f].total++;
-        if (npcs[i].active) {
-            g_floor_stats[f].active++;
-        }
-    }
-    g_floor_stats_dirty = false;
-}
-
-/*Update the counter when an NPC dies (decrement active).*/
-void floor_stats_npc_died(int floor_id) {
-    if (floor_id < 0 || floor_id >= MAX_FLOORS) {
-        return;
-    }
-    if (g_floor_stats[floor_id].active > 0) {
-        g_floor_stats[floor_id].active--;
-    }
-}
-
-/*Updates the counter when an NPC respawns or is spawned.*/
-void floor_stats_npc_spawned(int floor_id) {
-    if (floor_id < 0 || floor_id >= MAX_FLOORS) {
-        return;
-    }
-    g_floor_stats[floor_id].active++;
-}
-
-/*Single point for NPC alive/dead transitions (see the comment in
- * server_world.h). The stats update mirrors floor_stats_rebuild() EXACTLY
- * (template != NULL, not a merchant, respawn_timer >= 0, floor in range):
- * a slot that the rebuild would not count must not move the counters
- * either, otherwise every summon/drop/corpse-reuse would leak one count
- * per transition. Callers must invoke it with the NPC's FINAL fields
- * already set (template, floor_id, archetype), not before.*/
-void npc_set_active(NPC *n, bool active) {
-    if (!n || n->active == active) {
-        return;
-    }
-    n->active = active;
-    if (!active && n >= g_npcs && n < g_npcs + MAX_NPCS) client_seen_forget_npc((int)(n - g_npcs));
-    if (n->archetype == ARCH_MERCHANT) {
-        return; /*excluded from the cache, like in floor_stats_rebuild*/
-    }
-    if (n->template == NULL || n->respawn_timer < 0) {
-        return; /*not counted by the rebuild: nothing to keep in sync*/
-    }
-    if (n->floor_id < 0 || n->floor_id >= MAX_FLOORS) {
-        return;
-    }
-    if (active) {
-        floor_stats_npc_spawned(n->floor_id);
-    } else {
-        floor_stats_npc_died(n->floor_id);
-    }
-}
-
-/*============================================================================
- * Per-floor active NPC index
- *
- * Local queries used to scan all MAX_NPCS (50,000) slots on every player
- * step (entity broadcast) and on every attack (aggro) — tens of thousands
- * of wasted comparisons each. Instead we keep one index array per floor
- * with the slots of the active NPCs and rebuild it once per world tick
- * (5/s: 50k simple checks = negligible).
- *
- * The index is deliberately dumb (no incremental insert/remove): NPC
- * spawn/death/move happen in many places, and a full rebuild every tick
- * is simpler and strictly cheaper than keeping bookkeeping at every
- * mutation site. Between ticks a consumer validates each entry
- * (active && same floor), so the worst case is a few stale checks.*/
-#define FLOOR_INDEX_CAP 4096
-static int  g_floor_idx[MAX_FLOORS][FLOOR_INDEX_CAP];
-static int  g_floor_idx_n[MAX_FLOORS];
-static bool g_floor_idx_overflow[MAX_FLOORS];
-
-void floor_index_rebuild(const NPC *npcs) {
-    for (int f = 0; f < MAX_FLOORS; f++) {
-        g_floor_idx_n[f] = 0;
-        g_floor_idx_overflow[f] = false;
-    }
-    for (int i = 0; i < MAX_NPCS; i++) {
-        const NPC *n = &npcs[i];
-        if (!n->active) {
-            continue;
-        }
-        int f = n->floor_id;
-        if (f < 0 || f >= MAX_FLOORS) {
-            continue;
-        }
-        if (g_floor_idx_overflow[f]) {
-            continue;
-        }
-        if (g_floor_idx_n[f] >= FLOOR_INDEX_CAP) {
-            /* Pathologically crowded floor: mark it and let consumers
-             * fall back to the legacy full scan (correctness first). */
-            g_floor_idx_overflow[f] = true;
-            continue;
-        }
-        g_floor_idx[f][g_floor_idx_n[f]++] = i;
-    }
-}
-
-/*Returns the index of the floor's active NPCs, or NULL when the floor
- * overflowed the cap (the caller must then do the full scan).*/
-const int *floor_index_for(int floor_id, int *count_out) {
-    if (floor_id < 0 || floor_id >= MAX_FLOORS) {
-        if (count_out) *count_out = 0;
-        return NULL;
-    }
-    if (g_floor_idx_overflow[floor_id]) {
-        if (count_out) *count_out = -1;
-        return NULL;
-    }
-    if (count_out) *count_out = g_floor_idx_n[floor_id];
-    return g_floor_idx[floor_id];
+void get_game_time(Game *game, int *h, int *m) {
+    int total_mins = (game->total_turns % 1440);
+    *h = (total_mins / 60 + 8) % 24;
+    *m = total_mins % 60;
 }
 
 /*============================================================================
@@ -211,686 +62,849 @@ const int *floor_index_for(int floor_id, int *count_out) {
  * @npcs: Array of active and inactive NPCs.
  * ==========================================================================*/
 
-/*Respawn a dead player in town, keeping entity_grid consistent and the
- * client in sync.
- *
- * The old code (six death sites: starvation/poison/burn/bleed in
- * update_world, bleed during MSG_MOVE, perform_attack_npc and the mage
- * AI) set hp/floor_id/x/y by hand and did NOT:
- *   - clear the player's cell on the OLD floor (it stayed "occupied"
- *     forever, blocking that tile for other entities);
- *   - register the player in the NEW floor's grid (invisible to
- *     collision detection until the next sync);
- *   - send the respawned player anything (his client kept showing the
- *     dungeon until the next move, and the town map was never sent,
- *     so the first view after death was pure rock).
- * This helper does all of it in one place.*/
-void player_respawn_town(Client *c) {
-  if (!c || !master_world)
-    return;
-  int old_floor = c->floor_id;
-  /*Tell the graphical client BEFORE the teleport (death screen).*/
-  ui_send_event(c, GEV_PLAYER_DIED, 0, c->entity_id, old_floor, c->x, c->y);
-  if (old_floor >= 0 && old_floor < MAX_FLOORS &&
-      c->x >= 0 && c->x < MAP_WIDTH && c->y >= 0 && c->y < MAP_HEIGHT &&
-      master_world->floors[old_floor].entity_grid[c->y][c->x] == c->entity_id) {
-    master_world->floors[old_floor].entity_grid[c->y][c->x] = 0;
-  }
-  c->hp = c->max_hp;
-  c->floor_id = 0;
-  c->x = MAP_CENTER_X + 1;
-  c->y = MAP_CENTER_Y + 1;
-  if (master_world->floors[0].entity_grid[c->y][c->x] == 0)
-    master_world->floors[0].entity_grid[c->y][c->x] = c->entity_id;
-  notify_player_left_floor(c, old_floor);
-  broadcast_player_state(c);
-  send_detailed_state(c);
-  send_map_chunk(c->sock, &master_world->floors[0].map, c->x, c->y,
-                 INITIAL_VIEW_RADIUS);
-  broadcast_nearby_entities(c, g_npcs);
-}
-
-static void broadcast_game_time(Client *clients) {
-  int total_mins = (global_total_turns % 1440);
-  int h = (total_mins / 60 + 8) % 24;
-  int m = total_mins % 60;
-
-  MsgHeader hdr = msg_hdr(MSG_TIME_SYNC, (int)sizeof(MsgTimeSync));
-  MsgTimeSync ts;
-  ts.game_hour = h;
-  ts.game_min = m;
-  ts.total_turns = global_total_turns;
-
-  for (int i = 0; i < MAX_CLIENTS; i++) {
-    if (clients[i].active && clients[i].authenticated) {
-      /*net_send_client: a failed time-sync send means a stuck/dead
-       * client — drop it instead of letting the message vanish (L2).*/
-      net_send_client(clients[i].sock, &hdr, sizeof(hdr));
-      net_send_client(clients[i].sock, &ts, sizeof(ts));
+/*Respawn a dead player in town: frees the cell on the old floor, tells
+ * that floor the player left, registers the player in the town grid and
+ * sends the client its new state and the town map. Every death site uses
+ * it.*/
+void player_respawn_town(Game *game, Client *c) {
+    if (!c || !game->world) {
+        return;
     }
-  }
+    int old_floor = c->floor_id;
+    if (old_floor >= 0 && old_floor < MAX_FLOORS && c->x >= 0 && c->x < MAP_WIDTH && c->y >= 0 &&
+        c->y < MAP_HEIGHT &&
+        game->world->floors[old_floor].entity_grid[c->y][c->x] == c->entity_id) {
+        game->world->floors[old_floor].entity_grid[c->y][c->x] = 0;
+    }
+    c->hp = c->max_hp;
+    c->hunger_level = 0;
+    c->exhaustion_level = 0;
+    c->effect_count = 0;
+    c->floor_id = 0;
+    c->x = MAP_CENTER_X + 1;
+    c->y = MAP_CENTER_Y + 1;
+    if (game->world->floors[0].entity_grid[c->y][c->x] == 0) {
+        game->world->floors[0].entity_grid[c->y][c->x] = c->entity_id;
+    }
+    notify_player_left_floor(game, c, old_floor);
+    broadcast_player_state(game, c);
+    send_detailed_state(game, c);
+    send_map_chunk(c->sock, &game->world->floors[0].map, c->x, c->y, INITIAL_VIEW_RADIUS);
+    broadcast_nearby_entities(c, game);
 }
 
-void update_world(Client *clients, NPC *npcs) {
-  static long long last_tick_ms = 0;
-  static time_t last_autosave = 0;
-  time_t now = time(NULL);
-  long long now_ms = get_time_ms();
+static void broadcast_game_time(Game *game, Client *clients) {
+    int total_mins = (game->total_turns % 1440);
+    int h = (total_mins / 60 + 8) % 24;
+    int m = total_mins % 60;
 
-  if (last_autosave == 0) {
-    last_autosave = now;
-  }
+    MsgTimeSync ts;
+    ts.game_hour = h;
+    ts.game_min = m;
+    ts.total_turns = game->total_turns;
 
-  /*-------------------------------------------------------
-   * Full auto-save every minute (60 seconds)
-   * -------------------------------------------------------*/
-  if (now - last_autosave >= 60) {
-    last_autosave = now;
-    int saved_count = 0;
     for (int i = 0; i < MAX_CLIENTS; i++) {
-      if (clients[i].active && clients[i].authenticated) {
-        save_player_data(&clients[i]);
-        saved_count++;
-      }
-    }
-    
-    /* --- Phase 3: Save Full State (Persistent Voxels and NPCs) --- */
-    if (master_world) {
-      char world_path[DATA_DIR_MAX + 32], npcs_path[DATA_DIR_MAX + 32];
-      snprintf(world_path, sizeof(world_path), "%s/world.dat", g_state_dir);
-      snprintf(npcs_path, sizeof(npcs_path), "%s/npcs.dat", g_state_dir);
-      world_save(master_world, world_path);
-      /*Atomic write (see atomic_write_begin): a crash mid-autosave must
-       * not leave a truncated npcs.dat that the next boot would treat
-       * as "world/NPCs inconsistent -> fresh world" (total state loss).*/
-      char tmp[DATA_DIR_MAX + 64];
-      FILE *fn = atomic_write_begin(npcs_path, tmp, sizeof(tmp));
-      if (fn) {
-        /*Compact format: [magic:uint32][count:int][NPC * count][next_id:int][turns:int]
-         * Replaces the old format that always wrote 50,000 slots.*/
-        const uint32_t magic = 0xDEAD7ECC;
-        int used = 0;
-        bool ok = true;
-        for (int ni = 0; ni < MAX_NPCS; ni++) {
-          if (npcs[ni].template != NULL || npcs[ni].active) {
-            used++;
-          }
+        if (clients[i].active && clients[i].authenticated) {
+            send_time_sync(clients[i].sock, &ts);
         }
-        ok = ok && (fwrite(&magic, sizeof(uint32_t), 1, fn) == 1);
-        ok = ok && (fwrite(&used, sizeof(int), 1, fn) == 1);
-        for (int ni = 0; ni < MAX_NPCS; ni++) {
-          if (npcs[ni].template != NULL || npcs[ni].active) {
-            ok = ok && (fwrite(&npcs[ni], sizeof(NPC), 1, fn) == 1);
-          }
-        }
-        ok = ok && (fwrite(&next_id, sizeof(int), 1, fn) == 1);
-        ok = ok && (fwrite(&global_total_turns, sizeof(int), 1, fn) == 1);
-        if (!atomic_write_end(fn, npcs_path, tmp, ok))
-          server_log("SYS", "WARNING: autosave of npcs.dat failed — previous file kept.");
-      }
-      server_log("SYS", "Auto-save: %d players, world and %d NPCs.", saved_count, MAX_NPCS);
     }
-  }
+}
 
-  /*--- Phase 4: Advanced Speed/Tick (TICK_MS per tick) ---
-   * The main loop already calls update_world() on the fixed-step clock,
-   * so this gate opens on (almost) every call; it stays as the
-   * authoritative definition of "one round passed".*/
-  if (last_tick_ms == 0) last_tick_ms = now_ms;
-  bool new_round = (now_ms - last_tick_ms >= TICK_MS);
-  if (new_round) {
-    last_tick_ms = now_ms;
-    global_total_turns++;
-    if (global_total_turns % 5 == 0) {
-      broadcast_game_time(clients);
+/*Snapshot world.dat and npcs.dat (in this order) for the writer thread,
+ * or write them synchronously when it is not running (startup, shutdown).
+ * Returns false if either could not be written (the writer logs why); the
+ * previous file is kept in that case.*/
+/*Paths of the two files of the world; false if the state directory path
+ * is too long.*/
+static bool world_paths(char *world, char *npcs, size_t n) {
+    if (!state_path(world, n, "world.dat") || !state_path(npcs, n, "npcs.dat")) {
+        server_log("SAVE", "State directory path too long.");
+        return false;
     }
-    /* -------------------------------------------------------
-     * World Events: Global event processing (Phase 5 MMO)
-     * ------------------------------------------------------- */
-    if (active_event_type == 0) {
-        if (global_total_turns % 1500 == 0) { //Every ~300 seconds (5 min real at 5 tick/s)
-            active_event_type = 1; // 1 = Skeletons
-            event_floor_id = (rand() % 10) + 1; //Floor 1-10
-            event_time_left = 1500; // 5 minutes
-            event_progress = 0;
-            event_goal = 5; // 5 Skeletons
-            
+    return true;
+}
+
+bool save_world_state(Game *game) {
+    char world_path[STATE_DIR_MAX + 32], npcs_path[STATE_DIR_MAX + 32];
+    bool ok = world_paths(world_path, npcs_path, sizeof(world_path)) &&
+              persist_write_world(world_path, game->world) &&
+              persist_write_npcs(npcs_path, game->npcs, &game->pools, MAX_NPCS, game->next_id,
+                                 game->total_turns);
+    if (ok) {
+        ground_journal_clear(); /*the ground of npcs.dat is the ground now*/
+    }
+    return ok;
+}
+
+bool autosave_step(Client *clients, Game *game, int step) {
+    char world_path[STATE_DIR_MAX + 32], npcs_path[STATE_DIR_MAX + 32];
+    if (!world_paths(world_path, npcs_path, sizeof(world_path))) {
+        return false;
+    }
+    if (step == 0) {
+        int saved_count = 0;
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (clients[i].active && clients[i].authenticated) {
+                save_player_data(&clients[i]);
+                saved_count++;
+            }
+        }
+        bool ok = persist_write_world(world_path, game->world);
+        if (ok) {
+            server_log("SYS", "Auto-save: %d players and the world.", saved_count);
+        }
+        return ok;
+    }
+    bool ok = persist_write_npcs(npcs_path, game->npcs, &game->pools, MAX_NPCS, game->next_id,
+                                 game->total_turns);
+    if (ok) {
+        ground_journal_clear();
+    }
+    return ok;
+}
+
+static int g_autosave_period_s = 60;
+
+void autosave_set_period(int seconds) {
+    g_autosave_period_s = seconds;
+}
+
+/*Once a minute, over AUTOSAVE_STEPS consecutive rounds (autosave_step).*/
+static void autosave_if_due(Client *clients, Game *game) {
+    static time_t last_autosave = 0;
+    static int step = -1; /*-1: no autosave in progress*/
+    if (g_autosave_period_s <= 0 && step < 0) {
+        return;
+    }
+    time_t now = time(NULL);
+    if (last_autosave == 0) {
+        last_autosave = now;
+    }
+    if (step < 0 && now - last_autosave >= g_autosave_period_s) {
+        last_autosave = now;
+        step = 0;
+    }
+    if (step >= 0) {
+        (void)autosave_step(clients, game, step);
+        step = step + 1 < AUTOSAVE_STEPS ? step + 1 : -1;
+    }
+}
+
+/*The global invasion event: starts every 1500 rounds on a random floor
+ * 1-10, ends with a reward when its goal is met or when time runs out. The
+ * reward goes to the defenders: who killed one of the invaders, and his
+ * party on the floor (npc_killed), still on the floor at the end.*/
+static void update_global_event(Game *game, Client *clients) {
+    if (game->event.type == 0) {
+        if (game->total_turns % 1500 == 0) {          //Every ~300 seconds (5 min real at 5 tick/s)
+            game->event.type = 1;                     // 1 = Skeletons
+            game->event.floor_id = (rand() % 10) + 1; //Floor 1-10
+            game->event.time_left = 1500;             // 5 minutes
+            game->event.progress = 0;
+            game->event.goal = 5; // 5 Skeletons
+            game->event.serial++;
+
             //Broadcast to everyone
             for (int j = 0; j < MAX_CLIENTS; j++) {
                 if (clients[j].active && clients[j].authenticated) {
-                    send_text_to_client(clients[j].sock, "[GLOBAL EVENT] Invasion on floor %d! Kill %d Skeletons! Time: 5 minutes.", event_floor_id, event_goal);
+                    send_text_to_client(
+                        clients[j].sock,
+                        "[GLOBAL EVENT] Invasion on floor %d! Kill %d Skeletons! Time: 5 minutes.",
+                        game->event.floor_id, game->event.goal);
                 }
             }
         }
     } else {
-        event_time_left--;
-        if (event_progress >= event_goal) {
+        game->event.time_left--;
+        if (game->event.progress >= game->event.goal) {
             // Victory
             for (int j = 0; j < MAX_CLIENTS; j++) {
                 if (clients[j].active && clients[j].authenticated) {
-                    send_text_to_client(clients[j].sock, "[GLOBAL EVENT] The invasion has been stopped! Defenders are rewarded.");
-                    if (clients[j].floor_id == event_floor_id) {
+                    send_text_to_client(
+                        clients[j].sock,
+                        "[GLOBAL EVENT] The invasion has been stopped! Defenders are rewarded.");
+                    /*The defenders: who fought this invasion, on its floor.*/
+                    if (clients[j].floor_id == game->event.floor_id &&
+                        clients[j].event_serial == game->event.serial) {
                         clients[j].gold += 500;
-                        send_text_to_client(clients[j].sock, "[SYSTEM] You received 500 gold for your bravery!");
+                        send_text_to_client(clients[j].sock,
+                                            "[SYSTEM] You received 500 gold for your bravery!");
                     }
                 }
             }
-            active_event_type = 0;
-        } else if (event_time_left <= 0) {
+            game->event.type = 0;
+        } else if (game->event.time_left <= 0) {
             // Defeat
             for (int j = 0; j < MAX_CLIENTS; j++) {
                 if (clients[j].active && clients[j].authenticated) {
-                    send_text_to_client(clients[j].sock, "[GLOBAL EVENT] Time is up, the monsters retreat into the shadows...");
+                    send_text_to_client(
+                        clients[j].sock,
+                        "[GLOBAL EVENT] Time is up, the monsters retreat into the shadows...");
                 }
             }
-            active_event_type = 0;
+            game->event.type = 0;
         }
     }
-
-    /*-------------------------------------------------------
-* Updates per round: players (dungeon floors)
-     * -------------------------------------------------------*/
-    for (int i = 0; i < MAX_CLIENTS; i++) {
-      if (!clients[i].active || !clients[i].authenticated) {
-        continue;
-      }
-      if (clients[i].floor_id <= 0) {
-        continue;
-      }
-
-      /*--- Light source consumption ---*/
-      ItemInstance *ls[] = {
-          &clients[i].slot_hand_r, &clients[i].slot_hand_l,
-          &clients[i].belt[0],     &clients[i].belt[1],
-          &clients[i].belt[2],     &clients[i].belt[3]
-      };
-      for (int j = 0; j < 6; j++) {
-        if (ls[j]->template_idx == -1) {
-          continue;
-        }
-        const ItemTemplate *it = &item_database[ls[j]->template_idx];
-        if (it->category != ITEM_LIGHT_SOURCE) {
-          continue;
-        }
-        if (ls[j]->durability > 0) {
-          ls[j]->durability--;
-          if (ls[j]->durability == 0) {
-            send_text_to_client(
-                clients[i].sock,
-                "[SYSTEM] Your light source has gone out!");
-          }
-        }
-      }
-
-      /* --- Hunger and Exhaustion System --- */
-      clients[i].hunger_level++;
-      if (clients[i].hunger_level >= HUNGER_MAX) {
-        if (global_total_turns % 2 == 0) {
-          clients[i].hp -= 2;
-          send_text_to_client(clients[i].sock,
-                              "[SYSTEM] You're starving!");
-          if (clients[i].hp <= 0) {
-            server_log("DEATH", "%s starved to death.", clients[i].username);
-            save_bones(&clients[i]);
-            player_respawn_town(&clients[i]);
-            send_text_to_client(clients[i].sock, "[SYSTEM] You died! The Arcane has returned you to town without your equipment!");
-          }
-        }
-        /*Exhaustion accumulates while you stay hungry*/
-        if (global_total_turns % 100 == 0) {
-          clients[i].exhaustion_level++;
-          send_text_to_client(
-              clients[i].sock,
-              "[SYSTEM] You have gained a level of Exhaustion!");
-        }
-      }
-
-      /* --- Update effects and conditions --- */
-      if (rules_update_effects(clients[i].effects, &clients[i].effect_count)) {
-        send_detailed_state(&clients[i]);
-      }
-
-      /*--- Saving throws to recover player condition ---*/
-      const char *conditions_to_check[] = {
-          "Paralyzed", "Stunned",   "Unconscious",
-          "Burning",   "Bleeding",  "Petrified", "Frozen"
-      };
-      for (int c_idx = 0; c_idx < 7; c_idx++) {
-        if (!rules_has_condition(clients[i].effects,
-                                 clients[i].effect_count,
-                                 conditions_to_check[c_idx])) {
-          continue;
-        }
-        int ts, td, tc, ti, tw, th;
-        get_total_stats(&clients[i], &ts, &td, &tc, &ti, &tw, &th);
-
-        /*Attribute used for the saving throw varies by condition*/
-        int mod = 0;
-        if (strcmp(conditions_to_check[c_idx], "Burning") == 0) {
-          mod = rules_get_modifier(td); /*Dexterity: flame reflexes*/
-        } else if (strcmp(conditions_to_check[c_idx], "Bleeding") == 0) {
-          mod = rules_get_modifier(tc); /* Constitution: stop the bleeding */
-        } else if (strcmp(conditions_to_check[c_idx], "Petrified") == 0) {
-          mod = rules_get_modifier(ts); /* Strength: free yourself from the stone */
-        } else if (strcmp(conditions_to_check[c_idx], "Frozen") == 0) {
-          mod = rules_get_modifier(ts); /*Strength: Break the ice*/
-        } else {
-          mod = rules_get_modifier(tc); /* Default: Constitution */
-        }
-
-        /*Disadvantage on saving throws if cursed*/
-        bool dis = rules_has_condition_t(clients[i].effects, clients[i].effect_count, COND_CURSED);
-
-        int roll_v = 0;
-        bool success = rules_roll_save(mod, 12, false, dis, &roll_v);
-        clog_save(clients[i].username, conditions_to_check[c_idx],
-                  roll_v, mod, 12, success);
-
-        if (success) {
-          for (int e_idx = 0; e_idx < clients[i].effect_count; e_idx++) {
-            if (strcasecmp(clients[i].effects[e_idx].name,
-                           conditions_to_check[c_idx]) == 0) {
-              clients[i].effects[e_idx] =
-                  clients[i].effects[clients[i].effect_count - 1];
-              clients[i].effect_count--;
-              send_text_to_client(
-                  clients[i].sock,
-                  "[SYSTEM] You have recovered from the %s state!",
-                  conditions_to_check[c_idx]);
-              send_detailed_state(&clients[i]);
-              break;
-            }
-          }
-        }
-      }
-
-      /* --- Invisibility notification (every 10 rounds) --- */
-      if (rules_has_condition_t(clients[i].effects, clients[i].effect_count, COND_INVISIBLE)) {
-        if (global_total_turns % 10 == 0) {
-          send_text_to_client(clients[i].sock,
-                              "[SYSTEM] You are currently invisible.");
-        }
-      }
-
-      /*--- Player condition periodic effects ---*/
-      if (rules_has_condition_t(clients[i].effects, clients[i].effect_count, COND_POISONED)) {
-        clients[i].hp -= 1;
-        send_text_to_client(
-            clients[i].sock,
-            "[SYSTEM] Feel the poison coursing through your veins...");
-        if (clients[i].hp <= 0) {
-          server_log("DEATH", "%s died from poison.", clients[i].username);
-            save_bones(&clients[i]);
-            player_respawn_town(&clients[i]);
-            send_text_to_client(clients[i].sock, "[SYSTEM] You died! The Arcane has returned you to town without your equipment!");
-        }
-        send_detailed_state(&clients[i]);
-      }
-
-      if (rules_has_condition_t(clients[i].effects, clients[i].effect_count, COND_BURNING)) {
-        /*If in water, turn off immediately*/
-        Floor *fl = &master_world->floors[clients[i].floor_id];
-        if (fl->map.data[0][clients[i].y][clients[i].x] == VOXEL_WATER) {
-          for (int e_idx = 0; e_idx < clients[i].effect_count; e_idx++) {
-            if (strcasecmp(clients[i].effects[e_idx].name, "Burning") == 0) {
-              clients[i].effects[e_idx] =
-                  clients[i].effects[clients[i].effect_count - 1];
-              clients[i].effect_count--;
-              send_text_to_client(clients[i].sock,
-                                  "[SYSTEM] Water extinguishes flames!");
-              send_detailed_state(&clients[i]);
-              break;
-            }
-          }
-        } else {
-          clients[i].hp -= 2;
-          send_text_to_client(clients[i].sock, "[SYSTEM] You are burning!");
-          if (clients[i].hp <= 0) {
-            server_log("DEATH", "%s burned to death.", clients[i].username);
-            save_bones(&clients[i]);
-            player_respawn_town(&clients[i]);
-            send_text_to_client(clients[i].sock, "[SYSTEM] You died! The Arcane has returned you to town without your equipment!");
-          }
-          send_detailed_state(&clients[i]);
-        }
-      }
-
-      if (rules_has_condition_t(clients[i].effects, clients[i].effect_count, COND_BLEEDING)) {
-        clients[i].hp -= 1;
-        send_text_to_client(clients[i].sock,
-                            "[SYSTEM] You are bleeding...");
-        if (clients[i].hp <= 0) {
-          server_log("DEATH", "%s bled to death.",
-                     clients[i].username);
-            save_bones(&clients[i]);
-            player_respawn_town(&clients[i]);
-            send_text_to_client(clients[i].sock, "[SYSTEM] You died! The Arcane has returned you to town without your equipment!");
-        }
-        send_detailed_state(&clients[i]);
-      }
-    } /*end loop players*/
-
-    /* --- Trap respawn --- */
-    for (int f_id = 1; f_id < MAX_FLOORS; f_id++) {
-      Floor *f = &master_world->floors[f_id];
-      for (int t_idx = 0; t_idx < f->trap_count; t_idx++) {
-        Trap *t = &f->traps[t_idx];
-        if (!t->active && t->respawn_timer > 0) {
-          t->respawn_timer--;
-          if (t->respawn_timer == 0) {
-            t->active = true;
-          }
-        }
-      }
-    }
-    
-    /* --- Crystal respawn --- */
-    for (int f_id = 0; f_id < MAX_FLOORS; f_id++) {
-      Floor *f = &master_world->floors[f_id];
-      for (int i = 0; i < f->crystal_respawn_count; i++) {
-        CrystalRespawn *cr = &f->crystal_respawns[i];
-        if (cr->respawn_timer > 0) {
-          cr->respawn_timer--;
-          if (cr->respawn_timer == 0) {
-            // Restore the crystal in the map
-            f->map.data[0][cr->y][cr->x] = cr->type;
-            
-            // Broadcast VFX to clients
-            float r = 1.0f, g = 1.0f, b = 1.0f;
-            if (cr->type == VOXEL_CRYSTAL_BLUE) { r = 0.3f; g = 0.7f; b = 1.0f; }
-            else if (cr->type == VOXEL_CRYSTAL_PURPLE) { r = 0.8f; g = 0.2f; b = 1.0f; }
-            else if (cr->type == VOXEL_CRYSTAL_RED) { r = 1.0f; g = 0.1f; b = 0.1f; }
-            else if (cr->type == VOXEL_CRYSTAL_GREEN) { r = 0.1f; g = 1.0f; b = 0.2f; }
-            else if (cr->type == VOXEL_CRYSTAL_YELLOW) { r = 1.0f; g = 0.9f; b = 0.1f; }
-            else if (cr->type == VOXEL_CRYSTAL_ORANGE) { r = 1.0f; g = 0.5f; b = 0.0f; }
-            else if (cr->type == VOXEL_CRYSTAL_CYAN) { r = 0.0f; g = 0.9f; b = 1.0f; }
-            
-            broadcast_spell_vfx(cr->x, cr->y, cr->x, cr->y, 1, r, g, b, f_id);
-            
-            // Remove from list
-            f->crystal_respawns[i] = f->crystal_respawns[f->crystal_respawn_count - 1];
-            f->crystal_respawn_count--;
-            i--; // re-check this index
-          }
-        }
-      }
-    }
-  } /*end new_round block*/
-
-  /* -------------------------------------------------------
-   * 1. NPC loop: AI, effects, and respawn timer
-   * ------------------------------------------------------- */
-  /*Round state captured for the WHOLE loop.
-   * The old code let the first NPC clear 'new_round' mid-loop, which broke
-   * three things at once:
-   *  - only the FIRST NPC of the tick decayed its effects (poison that
-   *    should last 5 rounds lasted dozens more);
-   *  - only ONE NPC per whole tick (5 ticks/s) could attack: a pack of 10
-   *    monsters hit once per second instead of 10 times;
-   *  - dead NPCs after the first acting one in the array did not count
-   *    down their respawn timer on that tick.
-   * Per-NPC "one action per round" is now enforced locally with
-   * first_cycle below, so this flag must never be cleared mid-loop.*/
-  bool was_new_round = new_round;
-  /*Kept for the post-loop logic (entity grid sync, density monitor,
-   * AoE clouds): true on exactly the ticks in which monsters may have
-   * moved, so the grid gets re-aligned on the right ticks.*/
-  bool round_active = was_new_round;
-
-  for (int i = 0; i < MAX_NPCS; i++) {
-    NPC *n = &npcs[i];
-
-    /*Merchants with respawn_timer == -1: Always skipped*/
-    if (n->respawn_timer < 0) {
-      continue;
-    }
-
-    if (n->active) {
-      /* Living NPC: update effects and AI */
-      if (was_new_round) {
-        rules_update_effects(n->effects, &n->effect_count);
-
-        /* --- Periodic effects: NPC poison --- */
-        if (rules_has_condition_t(n->effects, n->effect_count, COND_POISONED)) {
-          n->hp -= 1;
-          if (n->hp <= 0) {
-            n->hp = 0;
-            npc_set_active(n, false);
-            n->respawn_timer = 60;
-            if (n->archetype == ARCH_BOSS) {
-              handle_boss_death(NULL, n);
-            }
-          }
-        }
-
-        /* --- NPC Morale: below 20% HP rolls a saving throw vs Frightened --- */
-        if (n->hp < (n->max_hp / 5) && n->morale == 0) {
-          n->morale = 1;
-          int roll_v = 0;
-          bool success = rules_roll_save(0, 12, false, false, &roll_v);
-          if (!success) {
-            if (n->effect_count < MAX_EFFECTS_PER_ENTITY) {
-              n->effects[n->effect_count].name = "Frightened";
-              n->effects[n->effect_count].duration_rounds = 5;
-              n->effect_count++;
-              // clog_save(n->template->name, "Morale", roll_v, 0, 12, false);
-            }
-          }
-        }
-
-        /*--- NPC saving throws for condition recovery ---*/
-        /*Compared BY VALUE (ConditionType): the display name comes from
-         *the canonical table, so a renamed string can't break the logic.*/
-        const ConditionType npc_conditions[] = {
-            COND_PARALYZED, COND_STUNNED, COND_UNCONSCIOUS,
-            COND_PETRIFIED, COND_FROZEN
-        };
-        for (int c_idx = 0; c_idx < 5; c_idx++) {
-          if (!rules_has_condition_t(n->effects, n->effect_count,
-                                     npc_conditions[c_idx])) {
-            continue;
-          }
-          bool dis = rules_has_condition_t(n->effects, n->effect_count, COND_CURSED);
-          int roll_v = 0;
-          /*Base modifier +2 for NPCs*/
-          bool success = rules_roll_save(2, 12, false, dis, &roll_v);
-          /*npc_name(): an NPC with effects but template==NULL (a
-           * summoned elemental under a cloud) must not deref the
-           * template.*/
-          clog_save(npc_name(n), condition_to_name(npc_conditions[c_idx]),
-                    roll_v, 2, 12, success);
-          if (success) {
-            const char *cond_name = condition_to_name(npc_conditions[c_idx]);
-            for (int e_idx = 0; e_idx < n->effect_count; e_idx++) {
-              if (strcasecmp(n->effects[e_idx].name, cond_name) == 0) {
-                n->effects[e_idx] = n->effects[n->effect_count - 1];
-                n->effect_count--;
-                break;
-              }
-            }
-          }
-        }
-
-        /*--- Merchant store replenishment management ---*/
-        if (n->archetype == ARCH_MERCHANT) {
-          if (n->merchant.restock_timer > 0) {
-            n->merchant.restock_timer--;
-          } else {
-            for (int j = 0; j < n->merchant.item_count; j++) {
-              n->merchant.item_stock[j] = n->merchant.item_stock_max[j];
-            }
-            n->merchant.restock_timer = 100; /*Restock every 100 rounds ≈ 10 min*/
-          }
-        }
-      } /*end new_round for NPC*/
-
-      /*--- Block actions for debilitating conditions ---*/
-      if (rules_has_condition_t(n->effects, n->effect_count, COND_PARALYZED) ||
-          rules_has_condition_t(n->effects, n->effect_count, COND_STUNNED)    ||
-          rules_has_condition_t(n->effects, n->effect_count, COND_PETRIFIED)  ||
-          rules_has_condition_t(n->effects, n->effect_count, COND_FROZEN)     ||
-          rules_has_condition_t(n->effects, n->effect_count, COND_UNCONSCIOUS)) {
-        continue;
-      }
-
-      /* --- Speed/Tick System (Phase 4) ---
-       * The NPC accumulates energy every tick equal to its speed.
-       * It only acts when it has enough energy (threshold = ENERGY_THRESHOLD).
-       * Speed 1 = slow (Golem), 2 = normal, 3 = fast (Spider). */
-      int npc_speed = (n->template && n->template->speed > 0)
-                          ? n->template->speed
-                          : 2;
-      n->energy += npc_speed;
-
-      /*Each NPC gets at most ONE action (attack/cast) per round: the
-       * first energy cycle of THIS round runs with was_new_round, extra
-       * cycles (fast NPCs with surplus energy) only move.*/
-      bool first_cycle = true;
-      while (n->energy >= ENERGY_THRESHOLD) {
-        n->energy -= ENERGY_THRESHOLD;
-        ai_update_npc(n, clients, MAX_CLIENTS,
-                      was_new_round && first_cycle, npcs);
-        first_cycle = false;
-      }
-
-    } else if (n->template != NULL && !n->is_ghost &&
-               n->archetype != ARCH_TREASURE && n->archetype != ARCH_GOLD) {
-      /* Dead NPC: respawn countdown */
-      if (was_new_round && n->respawn_timer > 0) {
-        n->respawn_timer--;
-      }
-      if (n->respawn_timer == 0) {
-        /*Bounds: a corrupted npcs.dat can carry an out-of-range floor
-         * or spawn point. Leave the slot dead (the density monitor
-         * skips it too) instead of indexing the world out of bounds.*/
-        if (n->floor_id < 0 || n->floor_id >= MAX_FLOORS ||
-            n->spawn_x < 0 || n->spawn_x >= MAP_WIDTH ||
-            n->spawn_y < 0 || n->spawn_y >= MAP_HEIGHT) {
-            continue;
-        }
-        /* Ensure the spawn tile is free, otherwise delay */
-        if (master_world->floors[n->floor_id].entity_grid[n->spawn_y][n->spawn_x] != 0) {
-            n->respawn_timer = 5;
-            continue;
-        }
-        /*Revives at the spawn location (npc_set_active updates the
-         * O(1) floor cache in the same step — see A2).*/
-        npc_set_active(n, true);
-        n->x = n->spawn_x;
-        n->y = n->spawn_y;
-        n->hp = n->max_hp;
-        n->effect_count = 0;
-        n->morale = 0;
-        n->respawn_timer = 0;
-        master_world->floors[n->floor_id].entity_grid[n->y][n->x] = n->entity_id;
-        ai_init_npc(n, n->template->name, n->floor_id);
-        server_log("SPAWN", "%s respawned on floor %d (%d,%d)",
-                   n->template->name, n->floor_id, n->x, n->y);
-      }
-    }
-  } /*end of NPC loop*/
-
-  /*Rebuild the per-floor active-NPC index (spawn/death/split changed
-   * during the loop). 5/s * 50k cheap checks — the price that turns
-   * every local query (broadcast, aggro, swarm split) from O(50k) into
-   * O(entities on the floor).*/
-  floor_index_rebuild(npcs);
-
-  /*After each tick AI, realigns the entity_grid with the updated positions
-   * of the NPCs. Without this, the player passes through the monsters because
-   * the grid still holds the positions prior to the AI movement.*/
-  if (round_active) {
-    sync_entity_grid(npcs);
-  }
-
-
-  /*-------------------------------------------------------
-   * 2. Density Monitor: every global DENSITY_CHECK round
-   * Optimized with O(1) per-floor cache instead of O(N*M)
-   * -------------------------------------------------------*/
-  if (round_active && (global_total_turns % DENSITY_CHECK == 0)) {
-
-    /*Rebuild the cache only if reported dirty (first boot or load)*/
-    if (g_floor_stats_dirty) {
-      floor_stats_rebuild(npcs);
-    }
-
-    for (int f = 1; f < MAX_FLOORS; f++) {
-      int total  = g_floor_stats[f].total;
-      int active = g_floor_stats[f].active;
-
-      if (total == 0) {
-        continue;
-      }
-      int pct = (active * 100) / total;
-      if (pct >= DENSITY_MIN_PCT) {
-        continue;
-      }
-
-      /* Density too low: force respawn of the first dead NPC on
-       * this floor. O(N) scan — but performed rarely and only
-       * on floors in emergency, not on all of them. */
-      for (int i = 0; i < MAX_NPCS; i++) {
-        NPC *n = &npcs[i];
-        if (n->active) {
-          continue;
-        }
-        if (n->template == NULL) {
-          continue;
-        }
-        if (n->archetype == ARCH_MERCHANT) {
-          continue;
-        }
-        if (n->floor_id != f) {
-          continue;
-        }
-        if (n->respawn_timer < 0) {
-          continue;
-        }
-        if (n->spawn_x < 0 || n->spawn_x >= MAP_WIDTH ||
-            n->spawn_y < 0 || n->spawn_y >= MAP_HEIGHT) {
-          continue; /*corrupted spawn point: never index the grid OOB*/
-        }
-        if (master_world->floors[f].entity_grid[n->spawn_y][n->spawn_x] != 0) {
-            continue; /* Skip and try another NPC if this spawn spot is blocked */
-        }
-        npc_set_active(n, true); /* Updates the O(1) cache (A2) */
-        n->x            = n->spawn_x;
-        n->y            = n->spawn_y;
-        n->hp           = n->max_hp;
-        n->effect_count = 0;
-        n->morale       = 0;
-        n->respawn_timer = 0;
-        master_world->floors[f].entity_grid[n->y][n->x] = n->entity_id;
-        ai_init_npc(n, n->template->name, n->floor_id);
-        server_log("SPAWN",
-                   "[DENSITY] Floor %d (%d%%): emergency %s",
-                   f, pct, n->template->name);
-        break; /*One at a time so as not to overload*/
-      }
-    }
-  }
-
-  /*-------------------------------------------------------
-* 3. AoE persistent clouds update (every round)
-   * -------------------------------------------------------*/
-  /*'round_active': 'new_round' is cleared by the first AI cycle above.*/
-  if (round_active) {
-    aoe_update_clouds(npcs, MAX_NPCS, clients, MAX_CLIENTS);
-  }
-
-  /*-------------------------------------------------------
-   * 4. Creature movement for every player, every tick: the entity
-   *    broadcast used to run only when the player himself moved, so
-   *    monsters looked frozen (and then "teleported") around a player
-   *    standing still, fighting or resting. Compact 12-byte records.
-   * -------------------------------------------------------*/
-  for (int i = 0; i < MAX_CLIENTS; i++) {
-    if (clients[i].active && clients[i].authenticated) {
-      broadcast_nearby_entities(&clients[i], npcs);
-    }
-  }
 }
 
+void player_killed(Game *game, Client *c, const char *by) {
+    c->hp = 0;
+    clog_death(c->username, by, c->floor_id);
+    server_log("DEATH", "%s was killed by %s on floor %d (%d,%d).", c->username, by, c->floor_id,
+               c->x, c->y);
+    plus_event(c, GEV_PLAYER_DIED, 0, c->entity_id, 0, c->x, c->y); /*DragonGL+*/
+    save_bones(game, c);
+    player_respawn_town(game, c);
+}
+
+/*A death by hunger or by a condition: the bones stay, the character
+ * wakes up in town.*/
+void player_dies(Game *game, Client *c, const char *how) {
+    server_log("DEATH", "%s %s.", c->username, how);
+    plus_event(c, GEV_PLAYER_DIED, 0, c->entity_id, 0, c->x, c->y); /*DragonGL+*/
+    save_bones(game, c);
+    player_respawn_town(game, c);
+    send_text_to_client(
+        c->sock, "[SYSTEM] You died! The Arcane has returned you to town without your equipment!");
+}
+
+/*Removes the condition from the player; false if he did not have it.*/
+static bool player_drop_condition(Client *c, ConditionType cond) {
+    const char *name = condition_to_name(cond);
+    for (int e = 0; e < c->effect_count; e++) {
+        if (strcasecmp(c->effects[e].name, name) == 0) {
+            c->effects[e] = c->effects[c->effect_count - 1];
+            c->effect_count--;
+            return true;
+        }
+    }
+    return false;
+}
+
+/*The light that shows the way burns one round: the brightest lit source in
+ * the hands or on the belt (the spare ones burned too). When a unit of a
+ * stack of torches is spent, the next one is lit.*/
+static void player_light_round(Client *c) {
+    ItemInstance *ls[] = {&c->slot_hand_r, &c->slot_hand_l, &c->belt[0],
+                          &c->belt[1],     &c->belt[2],     &c->belt[3]};
+    ItemInstance *lit = NULL;
+    for (int j = 0; j < 6; j++) {
+        if (ls[j]->template_idx == -1 ||
+            item_database[ls[j]->template_idx].category != ITEM_LIGHT_SOURCE ||
+            ls[j]->durability <= 0) {
+            continue;
+        }
+        if (!lit || item_database[ls[j]->template_idx].light_radius >
+                        item_database[lit->template_idx].light_radius) {
+            lit = ls[j];
+        }
+    }
+    if (!lit) {
+        return;
+    }
+    if (--lit->durability > 0) {
+        return;
+    }
+    const ItemTemplate *t = &item_database[lit->template_idx];
+    if (lit->stack_count > 1) {
+        lit->stack_count--;
+        lit->durability = t->max_durability;
+        send_text_to_client(c->sock, "[SYSTEM] Your %s burns out: you light another (%d left).",
+                            t->name, lit->stack_count);
+    } else {
+        send_text_to_client(c->sock, "[SYSTEM] Your light source has gone out!");
+    }
+}
+
+/*Hunger grows every round (not for who carries an Ioun stone of
+ * sustenance); a starving character loses 2 HP every other round and gains
+ * a level of exhaustion every 100.*/
+static void player_hunger_round(Game *game, Client *c) {
+    WornTotals w;
+    player_worn(c, &w);
+    if (w.sustenance) {
+        return; /*an Ioun stone of sustenance: no need to eat*/
+    }
+    c->hunger_level++;
+    if (c->hunger_level < HUNGER_MAX) {
+        return;
+    }
+    if (game->total_turns % 2 == 0) {
+        player_damage(c, 2, DAMAGE_UNTYPED);
+        send_text_to_client(c->sock, "[SYSTEM] You're starving!");
+        if (c->hp <= 0) {
+            player_dies(game, c, "starved to death");
+            return;
+        }
+    }
+    if (game->total_turns % 100 == 0) {
+        c->exhaustion_level++;
+        send_text_to_client(c->sock, "[SYSTEM] You have gained a level of Exhaustion!");
+    }
+}
+
+/*Each round a DC 12 saving throw ends a condition: Dexterity against the
+ * flames, Strength against stone and ice, Constitution for the others, with
+ * the save bonuses of the items. A cursed character rolls with
+ * disadvantage.*/
+static void player_condition_saves(Game *game, Client *c) {
+    static const ConditionType k_conditions[] = {COND_PARALYZED, COND_STUNNED,  COND_UNCONSCIOUS,
+                                                 COND_BURNING,   COND_BLEEDING, COND_PETRIFIED,
+                                                 COND_FROZEN};
+    for (size_t k = 0; k < sizeof(k_conditions) / sizeof(k_conditions[0]); k++) {
+        ConditionType cond = k_conditions[k];
+        if (!rules_has_condition_t(c->effects, c->effect_count, cond)) {
+            continue;
+        }
+        Ability a = ABILITY_CON;
+        if (cond == COND_BURNING) {
+            a = ABILITY_DEX;
+        } else if (cond == COND_PETRIFIED || cond == COND_FROZEN) {
+            a = ABILITY_STR;
+        }
+        int mod = player_save_mod(c, a);
+        int roll_v = 0;
+        bool success = player_save(c, a, 12, SAVE_PLAIN, &roll_v);
+        clog_save(c->username, condition_to_name(cond), roll_v, mod, 12, success);
+        if (success && player_drop_condition(c, cond)) {
+            send_text_to_client(c->sock, "[SYSTEM] You have recovered from the %s state!",
+                                condition_to_name(cond));
+            send_detailed_state(game, c);
+        }
+    }
+}
+
+/*Poison and bleeding cost 1 HP a round, fire 2 (water puts it out): poison
+ * and fire damage, which resistance halves.*/
+static void player_periodic_damage(Game *game, Client *c) {
+    static const struct {
+        ConditionType cond;
+        int damage, type;
+        const char *feel, *death;
+    } k_periodic[] = {
+        {COND_POISONED, 1, DMG_POISON, "[SYSTEM] Feel the poison coursing through your veins...",
+         "died from poison"},
+        {COND_BURNING, 2, DMG_FIRE, "[SYSTEM] You are burning!", "burned to death"},
+        {COND_BLEEDING, 1, DAMAGE_UNTYPED, "[SYSTEM] You are bleeding...", "bled to death"},
+    };
+    for (size_t k = 0; k < sizeof(k_periodic) / sizeof(k_periodic[0]); k++) {
+        if (!rules_has_condition_t(c->effects, c->effect_count, k_periodic[k].cond)) {
+            continue;
+        }
+        const Floor *fl = &game->world->floors[c->floor_id];
+        if (k_periodic[k].cond == COND_BURNING && fl->map.data[0][c->y][c->x] == VOXEL_WATER) {
+            if (player_drop_condition(c, COND_BURNING)) {
+                send_text_to_client(c->sock, "[SYSTEM] Water extinguishes flames!");
+                send_detailed_state(game, c);
+            }
+            continue;
+        }
+        send_text_to_client(c->sock, "%s", k_periodic[k].feel);
+        player_damage(c, k_periodic[k].damage, k_periodic[k].type);
+        if (c->hp <= 0) {
+            player_dies(game, c, k_periodic[k].death);
+        }
+        send_detailed_state(game, c);
+    }
+}
+
+/*One round of a player: effects and conditions everywhere; light and
+ * hunger only in the dungeon (floor > 0).*/
+static void player_round(Game *game, Client *clients, int i) {
+    Client *c = &clients[i];
+    if (!c->active || !c->authenticated) {
+        return;
+    }
+    if (c->floor_id > 0) {
+        player_light_round(c);
+        player_hunger_round(game, c);
+    }
+    if (rules_update_effects(c->effects, &c->effect_count)) {
+        send_detailed_state(game, c);
+    }
+    player_condition_saves(game, c);
+    player_items_round(game, c);
+    if (game->total_turns % 10 == 0 &&
+        rules_has_condition_t(c->effects, c->effect_count, COND_INVISIBLE)) {
+        send_text_to_client(c->sock, "[SYSTEM] You are currently invisible.");
+    }
+    player_periodic_damage(game, c);
+}
+
+static void respawn_traps_and_crystals(Game *game) {
+    /* --- Trap respawn --- */
+    for (int f_id = 1; f_id < MAX_FLOORS; f_id++) {
+        Floor *f = &game->world->floors[f_id];
+        for (int t_idx = 0; t_idx < f->trap_count; t_idx++) {
+            Trap *t = &f->traps[t_idx];
+            if (!t->active && t->respawn_timer > 0) {
+                t->respawn_timer--;
+                if (t->respawn_timer == 0) {
+                    t->active = true;
+                }
+            }
+        }
+    }
+
+    /* --- Crystal respawn --- */
+    for (int f_id = 0; f_id < MAX_FLOORS; f_id++) {
+        Floor *f = &game->world->floors[f_id];
+        /*From the end: a restored crystal is replaced in the list by the
+         * last one, which has already been counted down.*/
+        for (int i = f->crystal_respawn_count - 1; i >= 0; i--) {
+            CrystalRespawn *cr = &f->crystal_respawns[i];
+            if (cr->respawn_timer > 0) {
+                cr->respawn_timer--;
+                if (cr->respawn_timer == 0) {
+                    // Restore the crystal in the map
+                    f->map.data[0][cr->y][cr->x] = cr->type;
+
+                    // Broadcast VFX to clients
+                    float r = 1.0f, g = 1.0f, b = 1.0f;
+                    if (cr->type == VOXEL_CRYSTAL_BLUE) {
+                        r = 0.3f;
+                        g = 0.7f;
+                        b = 1.0f;
+                    } else if (cr->type == VOXEL_CRYSTAL_PURPLE) {
+                        r = 0.8f;
+                        g = 0.2f;
+                        b = 1.0f;
+                    } else if (cr->type == VOXEL_CRYSTAL_RED) {
+                        r = 1.0f;
+                        g = 0.1f;
+                        b = 0.1f;
+                    } else if (cr->type == VOXEL_CRYSTAL_GREEN) {
+                        r = 0.1f;
+                        g = 1.0f;
+                        b = 0.2f;
+                    } else if (cr->type == VOXEL_CRYSTAL_YELLOW) {
+                        r = 1.0f;
+                        g = 0.9f;
+                        b = 0.1f;
+                    } else if (cr->type == VOXEL_CRYSTAL_ORANGE) {
+                        r = 1.0f;
+                        g = 0.5f;
+                        b = 0.0f;
+                    } else if (cr->type == VOXEL_CRYSTAL_CYAN) {
+                        r = 0.0f;
+                        g = 0.9f;
+                        b = 1.0f;
+                    }
+
+                    broadcast_spell_vfx(game, cr->x, cr->y, cr->x, cr->y, 1, r, g, b, f_id);
+
+                    f->crystal_respawns[i] = f->crystal_respawns[f->crystal_respawn_count - 1];
+                    f->crystal_respawn_count--;
+                }
+            }
+        }
+    }
+}
+
+static NPC *alloc_slot(Game *game, bool take_dead) {
+    /*The search starts where the last one ended: a table that fills up is
+     * not walked from the top at every spawn.*/
+    NPC *dead = NULL;
+    for (int k = 0; k < MAX_NPCS; k++) {
+        int i = (game->npc_alloc_hint + k) % MAX_NPCS;
+        if (game->npcs[i].active) {
+            continue;
+        }
+        if (game->npcs[i].template == NULL || game->npcs[i].respawn_timer < 0) {
+            game->npc_alloc_hint = (i + 1) % MAX_NPCS;
+            return &game->npcs[i];
+        }
+        /*A full table takes the slot of a dead monster, never of a boss:
+         * a boss that does not come back seals its stairs for good.*/
+        if (take_dead && !dead && game->npcs[i].archetype != ARCH_BOSS) {
+            dead = &game->npcs[i];
+        }
+    }
+    return dead;
+}
+
+NPC *npc_alloc(Game *game) {
+    return alloc_slot(game, true);
+}
+
+NPC *npc_alloc_free(Game *game) {
+    return alloc_slot(game, false);
+}
+
+NPC *npc_spawn_item(Game *game, int floor_id, int x, int y, const ItemInstance *item) {
+    NPC *n = npc_alloc(game);
+    if (!n) {
+        return NULL;
+    }
+    /*Fields first, activation last (npc_set_active)*/
+    n->entity_id = game->next_id++;
+    n->floor_id = floor_id;
+    n->x = x;
+    n->y = y;
+    n->archetype = ARCH_TREASURE;
+    n->template_idx = item->template_idx; /*the client renders the item from it*/
+    n->hp = n->max_hp = 1;
+    ItemInstance *loot = npc_loot_new(&game->pools, game->npcs, MAX_NPCS, n);
+    if (!loot) {
+        return NULL; /*the slot stays free: nothing was activated*/
+    }
+    loot[0] = *item;
+    n->template = NULL;
+    /*Nothing of the slot's previous tenant may show through.*/
+    n->is_ghost = false;
+    n->gold_drop = 0;
+    n->custom_name[0] = '\0';
+    n->effect_count = 0;
+    npc_set_active(game, n, true);
+    game->world->floors[floor_id].entity_grid[y][x] = n->entity_id;
+    return n;
+}
+
+NPC *npc_spawn_gold(Game *game, int floor_id, int x, int y, uint64_t gold) {
+    NPC *n = npc_alloc(game);
+    if (!n || gold == 0 || gold > INT_MAX) {
+        return NULL;
+    }
+    n->entity_id = game->next_id++;
+    n->floor_id = floor_id;
+    n->x = x;
+    n->y = y;
+    n->archetype = ARCH_GOLD;
+    n->template_idx = -1;
+    n->template = NULL; /*never respawns*/
+    n->respawn_timer = -1;
+    n->hp = n->max_hp = 9999;
+    n->gold_drop = (int)gold;
+    n->is_ghost = false;
+    n->custom_name[0] = '\0';
+    n->effect_count = 0;
+    npc_set_active(game, n, true);
+    game->world->floors[floor_id].entity_grid[y][x] = n->entity_id;
+    return n;
+}
+
+static bool npc_cannot_act(NPC *n) {
+    static const ConditionType k_blocking[] = {COND_PARALYZED,   COND_STUNNED,
+                                               COND_PETRIFIED,   COND_FROZEN,
+                                               COND_UNCONSCIOUS, COND_INCAPACITATED};
+    for (size_t i = 0; i < sizeof(k_blocking) / sizeof(k_blocking[0]); i++) {
+        if (rules_has_condition_t(n->effects, n->effect_count, k_blocking[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void merchant_restock(MerchantData *shop) {
+    for (int j = 0; j < shop->item_count; j++) {
+        shop->item_stock[j] = shop->item_stock_max[j];
+    }
+    shop->restock_timer = MERCHANT_RESTOCK_ROUNDS;
+}
+
+/*A merchant restocks every MERCHANT_RESTOCK_ROUNDS rounds.*/
+static void merchant_round(Game *game, NPC *n) {
+    MerchantData *shop = npc_shop(&game->pools, n);
+    if (!shop) {
+        return;
+    }
+    if (shop->restock_timer > 0) {
+        shop->restock_timer--;
+        return;
+    }
+    merchant_restock(shop);
+}
+
+/*Poison and bleeding cost an NPC 1 HP a round, fire 2. False if it died
+ * (nobody is credited).*/
+static bool npc_periodic_damage(Game *game, NPC *n) {
+    int damage = 0;
+    if (rules_has_condition_t(n->effects, n->effect_count, COND_POISONED)) {
+        damage += 1;
+    }
+    if (rules_has_condition_t(n->effects, n->effect_count, COND_BLEEDING)) {
+        damage += 1;
+    }
+    if (rules_has_condition_t(n->effects, n->effect_count, COND_BURNING)) {
+        damage += 2;
+    }
+    n->hp -= damage;
+    if (damage > 0 && n->hp <= 0) {
+        n->hp = 0;
+        npc_killed(game, NULL, n, NULL);
+        return false;
+    }
+    return true;
+}
+
+/*Morale: the first time it falls under a fifth of its hit points an NPC
+ * rolls a DC 12 save or is frightened for 5 rounds.*/
+static void npc_morale(NPC *n) {
+    if (n->hp >= (n->max_hp / 5) || n->morale != 0) {
+        return;
+    }
+    n->morale = 1;
+    if (!rules_roll_save(0, 12, false, false, NULL)) {
+        ActiveEffect fx;
+        memset(&fx, 0, sizeof(fx));
+        fx.name = condition_to_name(COND_FRIGHTENED);
+        fx.duration_rounds = 5;
+        rules_add_effect(n->effects, &n->effect_count, MAX_EFFECTS_PER_ENTITY, &fx);
+    }
+}
+
+/*Each round a DC 12 save (+2) ends a condition that takes the turn.*/
+static void npc_condition_saves(NPC *n) {
+    static const ConditionType k_conditions[] = {COND_PARALYZED, COND_STUNNED, COND_UNCONSCIOUS,
+                                                 COND_PETRIFIED, COND_FROZEN};
+    for (size_t k = 0; k < sizeof(k_conditions) / sizeof(k_conditions[0]); k++) {
+        if (!rules_has_condition_t(n->effects, n->effect_count, k_conditions[k])) {
+            continue;
+        }
+        const char *cond_name = condition_to_name(k_conditions[k]);
+        bool dis = rules_has_condition_t(n->effects, n->effect_count, COND_CURSED);
+        int roll_v = 0;
+        bool success = rules_roll_save(2, 12, false, dis, &roll_v);
+        clog_save(npc_name(n), cond_name, roll_v, 2, 12, success);
+        for (int e = 0; success && e < n->effect_count; e++) {
+            if (strcasecmp(n->effects[e].name, cond_name) == 0) {
+                n->effects[e] = n->effects[n->effect_count - 1];
+                n->effect_count--;
+                break;
+            }
+        }
+    }
+}
+
+/*Where a monster comes back: its spawn point, or, when loot lies there (a
+ * gold pile, a treasure: the bounty of a boss, ten piles within 3 steps,
+ * covers the tile of the kill too), the nearest free tile within
+ * RESPAWN_NEAR steps. False if a creature or a character stands there, or
+ * the loot leaves no room.*/
+#define RESPAWN_NEAR 6
+static bool respawn_tile(Game *game, const NPC *n, int *x, int *y) {
+    const Floor *fl = &game->world->floors[n->floor_id];
+    int held = fl->entity_grid[n->spawn_y][n->spawn_x];
+    *x = n->spawn_x;
+    *y = n->spawn_y;
+    if (held == 0) {
+        return true;
+    }
+    const NPC *o = npc_by_entity_id(game, held);
+    if (!o || (o->archetype != ARCH_GOLD && o->archetype != ARCH_TREASURE)) {
+        return false;
+    }
+    for (int r = 1; r <= RESPAWN_NEAR; r++) {
+        for (int dy = -r; dy <= r; dy++) {
+            for (int dx = -r; dx <= r; dx++) {
+                if ((abs(dx) == r || abs(dy) == r) &&
+                    tile_free(fl, n->spawn_x + dx, n->spawn_y + dy)) {
+                    *x = n->spawn_x + dx;
+                    *y = n->spawn_y + dy;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+/*A dead monster counts down and comes back at its spawn point (5 rounds
+ * later if a creature or a character stands there; next to it if loot lies
+ * there, respawn_tile).*/
+static void npc_respawn_round(Game *game, NPC *n) {
+    if (n->respawn_timer > 0) {
+        n->respawn_timer--;
+    }
+    if (n->respawn_timer != 0) {
+        return;
+    }
+    /*Bounds: a corrupted npcs.dat can carry an out-of-range floor or spawn
+     * point. The slot stays dead (the density monitor skips it too).*/
+    if (n->floor_id < 0 || n->floor_id >= MAX_FLOORS || n->spawn_x < 0 || n->spawn_x >= MAP_WIDTH ||
+        n->spawn_y < 0 || n->spawn_y >= MAP_HEIGHT) {
+        return;
+    }
+    int x, y;
+    if (!respawn_tile(game, n, &x, &y)) {
+        n->respawn_timer = 5;
+        return;
+    }
+    npc_set_active(game, n, true);
+    n->x = x;
+    n->y = y;
+    n->hp = n->max_hp;
+    n->effect_count = 0;
+    n->morale = 0;
+    n->respawn_timer = 0;
+    game->world->floors[n->floor_id].entity_grid[n->y][n->x] = n->entity_id;
+    ai_init_npc(n, n->template->name, n->floor_id);
+    server_log("SPAWN", "%s respawned on floor %d (%d,%d)", n->template->name, n->floor_id, n->x,
+               n->y);
+}
+
+/*The floors with at least one character on them. Only there the monsters
+ * live their round: with nobody to see them the others sleep (their dead
+ * still count down to the respawn, their merchants still restock).*/
+static void awake_floors(const Client *clients, bool awake[MAX_FLOORS]) {
+    memset(awake, 0, sizeof(bool) * MAX_FLOORS);
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        const Client *c = &clients[i];
+        if (c->active && c->authenticated && c->floor_id >= 0 && c->floor_id < MAX_FLOORS) {
+            awake[c->floor_id] = true;
+        }
+    }
+}
+
+/*One round of an NPC: its periodic damage, morale and saving throws, then
+ * as many AI cycles as its energy allows; a dead monster counts down to
+ * its respawn instead. Merchants only restock. On a floor that is not
+ * awake a living NPC does nothing at all.*/
+static void npc_round(Client *clients, Game *game, NPC *n, const bool awake[MAX_FLOORS]) {
+    if (n->respawn_timer < 0) {
+        if (n->active && n->archetype == ARCH_MERCHANT) {
+            merchant_round(game, n);
+        }
+        return;
+    }
+    if (!n->active) {
+        if (n->template != NULL && !n->is_ghost && n->archetype != ARCH_TREASURE &&
+            n->archetype != ARCH_GOLD) {
+            npc_respawn_round(game, n);
+        }
+        return;
+    }
+    /*An ally counts its rounds even where it sleeps: it ends when its
+     * character has left the floor.*/
+    if (npc_is_ally(n) && !ai_ally_round(game, n, clients, MAX_CLIENTS)) {
+        return;
+    }
+    if (n->floor_id < 0 || n->floor_id >= MAX_FLOORS || !awake[n->floor_id]) {
+        return;
+    }
+    if (!npc_periodic_damage(game, n)) {
+        return;
+    }
+    npc_morale(n);
+    npc_condition_saves(n);
+    /*Debilitating conditions take the turn; the effects then age by one
+     * round, so an effect of N rounds costs the NPC N turns.*/
+    if (!npc_cannot_act(n)) {
+        /*The NPC gains energy equal to its speed every tick (1 slow, 2
+         * normal, 3 fast) and acts when it reaches ENERGY_THRESHOLD. At most
+         * one action (attack, cast) per round: the first energy cycle of
+         * the round may act, the extra cycles only move.*/
+        n->energy += (n->template && n->template->speed > 0) ? n->template->speed : 2;
+        bool first_cycle = true;
+        while (n->energy >= ENERGY_THRESHOLD) {
+            n->energy -= ENERGY_THRESHOLD;
+            ai_update_npc(game, n, clients, MAX_CLIENTS, first_cycle);
+            first_cycle = false;
+        }
+    }
+    rules_update_effects(n->effects, &n->effect_count);
+}
+
+/*A floor whose living NPCs fall under DENSITY_MIN_PCT gets one of its dead
+ * NPCs back at its spawn point (one per floor per check).*/
+static void rebalance_floor_density(Game *game) {
+    for (int f = 1; f < MAX_FLOORS; f++) {
+        int total = 0;
+        int active = 0;
+        floor_stats_get(game, f, &total, &active);
+
+        if (total == 0) {
+            continue;
+        }
+        int pct = (active * 100) / total;
+        if (pct >= DENSITY_MIN_PCT) {
+            continue;
+        }
+
+        /* Density too low: force respawn of the first dead NPC on
+     * this floor. O(N) scan — but performed rarely and only
+     * on floors in emergency, not on all of them. */
+        for (int i = 0; i < MAX_NPCS; i++) {
+            NPC *n = &game->npcs[i];
+            if (n->active) {
+                continue;
+            }
+            /*The NPCs that never respawn (npc_round): a ghost brought back
+             * here was a second reward for the same bones.*/
+            if (n->template == NULL || n->is_ghost) {
+                continue;
+            }
+            if (n->archetype == ARCH_MERCHANT || n->archetype == ARCH_TREASURE ||
+                n->archetype == ARCH_GOLD) {
+                continue;
+            }
+            if (n->floor_id != f) {
+                continue;
+            }
+            if (n->respawn_timer < 0) {
+                continue;
+            }
+            if (n->spawn_x < 0 || n->spawn_x >= MAP_WIDTH || n->spawn_y < 0 ||
+                n->spawn_y >= MAP_HEIGHT) {
+                continue; /*corrupted spawn point: never index the grid OOB*/
+            }
+            if (game->world->floors[f].entity_grid[n->spawn_y][n->spawn_x] != 0) {
+                continue; /* Skip and try another NPC if this spawn spot is blocked */
+            }
+            npc_set_active(game, n, true); /* Updates the floor caches */
+            n->x = n->spawn_x;
+            n->y = n->spawn_y;
+            n->hp = n->max_hp;
+            n->effect_count = 0;
+            n->morale = 0;
+            n->respawn_timer = 0;
+            game->world->floors[f].entity_grid[n->y][n->x] = n->entity_id;
+            ai_init_npc(n, n->template->name, n->floor_id);
+            server_log("SPAWN", "[DENSITY] Floor %d (%d%%): emergency %s", f, pct,
+                       n->template->name);
+            break; /*One at a time so as not to overload*/
+        }
+    }
+}
+
+void update_world(Client *clients, Game *game) {
+    autosave_if_due(clients, game);
+
+    game->total_turns++;
+    if (game->total_turns % 5 == 0) {
+        broadcast_game_time(game, clients);
+    }
+    update_global_event(game, clients);
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        player_round(game, clients, i);
+    }
+    respawn_traps_and_crystals(game);
+
+    /*Each NPC decays its effects and acts once per round (first_cycle in
+     * npc_round); every dead one counts down.*/
+    bool awake[MAX_FLOORS];
+    awake_floors(clients, awake);
+    for (int i = 0; i < MAX_NPCS; i++) {
+        npc_round(clients, game, &game->npcs[i], awake);
+    }
+
+    /*Spawns, deaths and splits of this round.*/
+    floor_index_rebuild(game);
+    /*The AI moved the monsters: realign the entity grid, or players would
+     * walk through them. Only where someone is, or was a round ago (the
+     * last cleaning of a floor left): elsewhere no monster moves, and
+     * clearing all the 101 grids (36 MB) was most of the round.*/
+    static bool was_awake[MAX_FLOORS];
+    bool rebuild[MAX_FLOORS];
+    for (int f = 0; f < MAX_FLOORS; f++) {
+        rebuild[f] = awake[f] || was_awake[f];
+        was_awake[f] = awake[f];
+    }
+    sync_entity_grid_floors(game, rebuild);
+    if (game->total_turns % DENSITY_CHECK == 0) {
+        rebalance_floor_density(game);
+    }
+    aoe_update_clouds(game, clients, MAX_CLIENTS);
+}
 
 /*pickup_tombstone_items has been replaced by tombstone_pickup() in tombstone.c*/

@@ -25,14 +25,14 @@
 #include <stddef.h>
 #include "traps.h"
 
-#define MAP_WIDTH 300
-#define MAP_HEIGHT 300
-#define MAP_DEPTH 1
-#define MAX_FLOORS 101
+#define MAP_WIDTH           300
+#define MAP_HEIGHT          300
+#define MAP_DEPTH           1
+#define MAX_FLOORS          101
 #define MAX_TRAPS_PER_FLOOR 100
 
-#define MAP_CENTER_X (MAP_WIDTH / 2)
-#define MAP_CENTER_Y (MAP_HEIGHT / 2)
+#define MAP_CENTER_X        (MAP_WIDTH / 2)
+#define MAP_CENTER_Y        (MAP_HEIGHT / 2)
 #define INITIAL_VIEW_RADIUS 100
 
 /*Logical voxel identifiers (33 types). Kept as an enum for readable names;
@@ -71,28 +71,42 @@ typedef enum {
     VOXEL_COUNT = 28
 } VoxelId;
 
-/*Explicit legacy synonyms — documented here on purpose:
- * VOXEL_EMPTY == VOXEL_FLOOR (1) and VOXEL_SOLID == VOXEL_ROCK (0).
- * They are aliases of the same tiles, NOT distinct values: code that
- * compares against VOXEL_SOLID is comparing against rock. Prefer the
- * canonical names (VOXEL_FLOOR / VOXEL_ROCK) in new code.*/
-#define VOXEL_EMPTY VOXEL_FLOOR
-#define VOXEL_SOLID VOXEL_ROCK
-
 /*Compact storage type: 1 byte per tile. All VoxelId values fit (checked
  * below), so every existing comparison/assignment keeps its meaning.*/
 typedef uint8_t VoxelType;
 
-_Static_assert(VOXEL_COUNT <= 256,
-               "VoxelId values must fit in a uint8_t (VoxelType)");
-_Static_assert(VOXEL_EMPTY == VOXEL_FLOOR && VOXEL_SOLID == VOXEL_ROCK,
-               "Legacy voxel aliases must stay in sync");
+_Static_assert(VOXEL_COUNT <= 256, "VoxelId values must fit in a uint8_t (VoxelType)");
+
+/*The one rule of movement, for characters and creatures alike: only walls
+ * and rock stop a step.*/
+static inline bool voxel_passable(VoxelType v) {
+    return v != VOXEL_WALL && v != VOXEL_ROCK;
+}
+
+/*Open ground, where a creature, a chest or a merchant may be placed: not
+ * a wall, a door, the stairs, a trap, water, lava or a mineral.*/
+static inline bool voxel_is_ground(VoxelType v) {
+    switch (v) {
+    case VOXEL_FLOOR:
+    case VOXEL_GRASS:
+    case VOXEL_WOOD:
+    case VOXEL_COBBLE:
+    case VOXEL_ICE:
+    case VOXEL_SAND:
+    case VOXEL_ASH:
+    case VOXEL_MUD:
+    case VOXEL_MARBLE:
+        return true;
+    default:
+        return false;
+    }
+}
 
 typedef VoxelType TileType;
 #define TILE_EMPTY VOXEL_FLOOR
-#define TILE_WALL VOXEL_WALL
-#define TILE_DOOR VOXEL_DOOR
-#define TILE_ROCK VOXEL_ROCK
+#define TILE_WALL  VOXEL_WALL
+#define TILE_DOOR  VOXEL_DOOR
+#define TILE_ROCK  VOXEL_ROCK
 
 typedef struct {
     VoxelType data[MAP_DEPTH][MAP_HEIGHT][MAP_WIDTH];
@@ -118,13 +132,29 @@ typedef struct {
     Floor floors[MAX_FLOORS];
 } World;
 
-void world_init(World* world);
-void world_save(World* world, const char* filename);
-bool world_load(World* world, const char* filename);
-/*CRC-32 (IEEE 802.3, polynomial 0xEDB88320), table-driven. Shared by
- * world.dat (WorldSaveHeader) and the player saves (SaveHeader).*/
-uint32_t crc32_data(const void *data, size_t len);
-void map_dig_room(Map* map, int x, int y, int w, int h);
-void generate_procedural_dungeon(Map* map, int floor_id);
+/* Generate every floor of the world (floor_init on each). */
+void world_init(World *world);
+/* Generate one floor: the city on floor 0, a dungeon below, and its traps.
+ * Uses rand(): the caller seeds the RNG. */
+void floor_init(Floor *floor, int floor_id);
+void generate_procedural_dungeon(Map *map, int floor_id);
+/*The staircase down reached on foot from the staircase up: when walls,
+ * rock or a room without a way out cut them apart, the shortest way from
+ * the staircase down to the ground reached is opened (a wall becomes a
+ * door, rock a cobbled tunnel). True if a way was opened. A new floor
+ * gets it, and so does every floor of a world loaded from disk.*/
+bool map_connect_stairs(Map *map);
+/*The floors of ash and lava (56-75, 91-100). A world generated before
+ * their rooms got stone walls has walls of obsidian, which is walked on:
+ * map_wall_up_obsidian turns the obsidian that touches the rock around a
+ * room back into a wall (the decorations stand inside the rooms) and
+ * returns how many. A new floor has none.*/
+bool map_obsidian_band(int floor_id);
+int map_wall_up_obsidian(Map *map);
+
+/* Angle in radians of shop slot 0..10 on the ring of floor 0 (map.c,
+ * generate_city). The server places the shop doors and merchants with the
+ * same angle, so the computation lives here only. */
+float city_shop_angle(int slot);
 
 #endif

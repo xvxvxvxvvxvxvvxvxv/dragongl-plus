@@ -1,13 +1,29 @@
-* Wed Nov 25 2026 DragonGL+ - 2026.11.25.01
-- ITEMS: the Mace of Smiting, Mace of Disruption, Mace of Terror, Nine
-  Lives Stealer and Sun Blade deal 1d6 (maces) or 1d8 (swords) damage;
-  they had no damage dice, listed "0d0 dmg" and only hit for the
-  Strength modifier.
-- SHOPS: the Net, the Blowgun and ammunition show "-" instead of
-  "0d0 dmg" in the shop list.
-- COMMANDS: the chest placed by dm_place holds the chosen item (it gave
-  random loot); dm_spawn_boss no longer says "Boss Boss <name>" and
-  rejects floors past 100 clearly; the DM help lists dm_merchant.
+* Wed Nov 25 2026 DragonGL+ - 2026.11
+- SERVER: DragonGL+ now runs on Dragon GL's current server (Nicola
+  Taibi, 2026.11.23.01) instead of the fork of October: protocol v5
+  over TLS 1.3, Argon2id accounts, the rules of LORE.md (monster stats,
+  resistances and abilities from the bestiary, armour rules, every spell
+  and magic item, merchants that restock, ranged weapons, tombstones,
+  swarms...), its tests and tools. Its fixes can be merged from now on.
+- PROTOCOL: a DragonGL+ client and server agree on an extension in the
+  TLS handshake (ALPN dragongl-plus/5.1, PROTOCOL_PLUS.md): inventory,
+  shop, spellbook, progress, creature identity and game events. A Dragon
+  GL client joins a DragonGL+ server with plain v5; the DragonGL+ client
+  joins a Dragon GL server in compatibility mode. The plaintext protocol
+  of the original release is gone.
+- SOLO: the private server listens on this computer only, reads its
+  password from a file, and the client pins the certificate it creates;
+  a server left over by a crashed game is stopped before a new one
+  starts. Heroes of DragonGL+ 2026.10 are imported into the new world
+  (level, XP, abilities, gold, items and spells by name).
+- GAMEPLAY: starting gear is worn; creatures move smoothly between the
+  hero's steps (positions every round); haggle shows "7 - 2 = 5".
+- WINDOWS: the server builds and runs on Windows (platform_win32.h maps
+  its POSIX calls); OpenSSL and libsodium are linked statically
+  (tools/build_deps.sh), so the packages still need nothing installed.
+- CI: Dragon GL's unit and integration tests, the extension tests and a
+  smoke test of the Windows server on a Windows runner.
+
 * Tue Nov 24 2026 DragonGL+ - 2026.11.24.01
 - SHOPS: "identify <name>" with a name that matched no unknown item
   identified (and charged 100gp for) the last unknown item in the

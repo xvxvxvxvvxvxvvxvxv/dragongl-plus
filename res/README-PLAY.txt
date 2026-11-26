@@ -23,10 +23,14 @@ PLAY SOLO
 
 PLAY WITH FRIENDS
   One player runs the server:
-    Windows : dragongl_server.exe -P 8080 -p <server password>
-    Linux   : ./dragongl_server -P 8080 -p <server password>
+    1. write the server password (8-63 characters) in a text file,
+       e.g. server-password.txt, next to the server
+    2. Windows : dragongl_server.exe -P 8080 --password-file server-password.txt
+       Linux   : ./dragongl_server -P 8080 --password-file server-password.txt
   (open TCP port 8080 on the firewall/router). Everyone else chooses
   "Join a Server" and enters the address, port and server password.
+  The connection is encrypted. The first time, the game remembers the
+  server's certificate fingerprint (the server writes it in its log).
 
 CONTROLS (all of them are also listed in game: press F1 or H)
   Left click        move / attack / talk / pick up      Right drag   rotate camera
@@ -64,8 +68,10 @@ GIOCARE IN SOLITARIO
 
 GIOCARE CON GLI AMICI
   Un giocatore avvia il server:
-    Windows : dragongl_server.exe -P 8080 -p <password del server>
-    Linux   : ./dragongl_server -P 8080 -p <password del server>
+    1. scrivere la password del server (8-63 caratteri) in un file di
+       testo, es. server-password.txt, accanto al server
+    2. Windows : dragongl_server.exe -P 8080 --password-file server-password.txt
+       Linux   : ./dragongl_server -P 8080 --password-file server-password.txt
   (aprire la porta TCP 8080). Gli altri scelgono "Join a Server" e
   inseriscono indirizzo, porta e password del server.
 
@@ -76,7 +82,8 @@ COMANDI: vedi la sezione inglese qui sopra, oppure premi F1 / H nel gioco.
 =============================================================================
   See the licenses/ folder: GLFW (zlib), volk (MIT), Vulkan headers
   (Apache-2.0/MIT), miniaudio (MIT-0), stb (public domain), wepoll
-  (BSD-2), cJSON (MIT), Cinzel and Alegreya Sans fonts (SIL OFL 1.1);
+  (BSD-2), cJSON (MIT), OpenSSL (Apache-2.0), libsodium (ISC), Cinzel and
+  Alegreya Sans fonts (SIL OFL 1.1);
   Windows build only: MinGW-w64 runtime and winpthreads (ZPL-2.1/MIT/BSD).
 
 =============================================================================

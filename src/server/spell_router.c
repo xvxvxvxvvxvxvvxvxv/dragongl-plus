@@ -24,13 +24,18 @@
  * or a category of spells that does not reduce to "general damage" or
  * "generic buff".
  *
+ * A spell reaches its handler through the "handler" field of its effect
+ * (data/spells.json), never through its name.
+ *
  * Categories implemented:
- * 1. TERRAIN — Edit voxels on the map (Wall of Stone, Mud, Ice)
+ * 1. TERRAIN — Edit voxels on the map (the "terrain" field of an effect)
  * 2. SUMMON — Summons a new NPC ally next to the caster
  * 3. CHARM — Change the faction of a target NPC
  * 4. UTILITY — Teleport, Invisibility and other special effects*/
 
 #include "spell_router.h"
+#include "ai.h"
+#include "spell_utility.h"
 #include "server_internal.h"
 #include "server_spawn.h"
 #include "server_world.h"
@@ -38,6 +43,11 @@
 #include "map.h"
 #include "rules.h"
 #include "bestiary.h"
+#include "spell_cast.h"
+#include "spell_rules.h"
+#include "player.h"
+#include "server_log.h"
+#include "server_tiles.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,9 +59,6 @@
 /* =========================================================================
  * Internal prototypes
  * ========================================================================= */
-static bool handle_wall_of_stone(SpellContext *ctx);
-static bool handle_mud_field(SpellContext *ctx);
-static bool handle_ice_storm_terrain(SpellContext *ctx);
 static bool handle_summon_elemental(SpellContext *ctx);
 static bool handle_animate_dead(SpellContext *ctx);
 static bool handle_charm_person(SpellContext *ctx);
@@ -61,83 +68,47 @@ static bool handle_invisibility(SpellContext *ctx);
 static bool handle_blink(SpellContext *ctx);
 static bool handle_class_transit(SpellContext *ctx);
 
-/*============================================================================
- * Lookup table hook: {exact_spell_name, handler}
-* MUST be kept in alphabetical order (spell_router_init() sorts it)
- * ==========================================================================*/
-static SpellHook g_spell_hooks[] = {
-    { "Animate Dead",         handle_animate_dead       },
-    { "Arcane Transit",       handle_class_transit      },
-    { "Ancestral Totem Call", handle_class_transit      },
-    { "Bloodline Rift",       handle_class_transit      },
-    { "Blink",                handle_blink              },
-    { "Charm Person",         handle_charm_person       },
-    { "Divine Recall",        handle_class_transit      },
-    { "Flowing Step",         handle_class_transit      },
-    { "Dominate Monster",     handle_dominate_monster   },
-    { "Ice Storm",            handle_ice_storm_terrain  },
-    { "Hunter's Trail",       handle_class_transit      },
-    { "Invisibility",         handle_invisibility       },
-    { "Mud Field",            handle_mud_field          },
-    { "Oathbound Passage",    handle_class_transit      },
-    { "Pact Passage",         handle_class_transit      },
-    { "Summon Elemental",     handle_summon_elemental   },
-    { "Teleport",             handle_teleport           },
-    { "The Back Door",        handle_class_transit      },
-    { "The Green Path",       handle_class_transit      },
-    { "The Last Refrain",     handle_class_transit      },
-    { "Warrior's March",      handle_class_transit      },
-    { "Wall of Stone",        handle_wall_of_stone      },
+/*One handler per SpellHandler value (spell_effect.c names them).*/
+static const SpellHandlerFn g_handlers[SPELL_HANDLER_COUNT] = {
+    [SPELL_HANDLER_ANIMATE_DEAD] = handle_animate_dead,
+    [SPELL_HANDLER_BLINK] = handle_blink,
+    [SPELL_HANDLER_CHARM_PERSON] = handle_charm_person,
+    [SPELL_HANDLER_CLASS_TRANSIT] = handle_class_transit,
+    [SPELL_HANDLER_DOMINATE_MONSTER] = handle_dominate_monster,
+    [SPELL_HANDLER_INVISIBILITY] = handle_invisibility,
+    [SPELL_HANDLER_SUMMON_ELEMENTAL] = handle_summon_elemental,
+    [SPELL_HANDLER_TELEPORT] = handle_teleport,
+    [SPELL_HANDLER_CLEANSE] = spell_cleanse,
+    [SPELL_HANDLER_FIND_TRAPS] = spell_find_traps,
+    [SPELL_HANDLER_IDENTIFY] = spell_identify,
+    [SPELL_HANDLER_LIGHT] = spell_light,
+    [SPELL_HANDLER_MEND] = spell_mend,
+    [SPELL_HANDLER_NOURISH] = spell_nourish,
+    [SPELL_HANDLER_RALLY] = spell_rally,
+    [SPELL_HANDLER_REMOVE_CURSE] = spell_remove_curse,
+    [SPELL_HANDLER_SENSE] = spell_sense,
+    [SPELL_HANDLER_SHAPE_EARTH] = spell_shape_earth,
+    [SPELL_HANDLER_SHELTER] = spell_shelter,
+    [SPELL_HANDLER_SUMMON] = spell_summon,
 };
 
-static int g_hook_count = (int)(sizeof(g_spell_hooks) / sizeof(g_spell_hooks[0]));
-static bool g_router_ready = false;
-
-/*============================================================================
- * Comparator for qsort/bsearch (case-insensitive)
- * ==========================================================================*/
-static int hook_cmp(const void *a, const void *b) {
-    const SpellHook *ha = (const SpellHook *)a;
-    const SpellHook *hb = (const SpellHook *)b;
-    return strcasecmp(ha->name, hb->name);
-}
-
-/*============================================================================
- * spell_router_init
- * Order g_spell_hooks only once to enable binary search.
- * ==========================================================================*/
 void spell_router_init(void) {
-    qsort(g_spell_hooks, (size_t)g_hook_count, sizeof(SpellHook), hook_cmp);
-    g_router_ready = true;
-    server_log("MAGIC", "Magic Router initialized: %d hooks registered.", g_hook_count);
+    int count = 0;
+    for (int h = SPELL_HANDLER_NONE + 1; h < SPELL_HANDLER_COUNT; h++) {
+        count += g_handlers[h] != NULL;
+    }
+    server_log("MAGIC", "Magic Router initialized: %d handlers.", count);
 }
 
-/*============================================================================
- * spell_router_dispatch
-* O(log N) binary search in table. Returns true if handled.
- * ==========================================================================*/
 bool spell_router_dispatch(SpellContext *ctx) {
-    if (!g_router_ready || !ctx || !ctx->sp) {
+    if (!ctx || !ctx->sp) {
         return false;
     }
-
-    SpellHook key;
-    key.name    = ctx->sp->name;
-    key.handler = NULL;
-
-    SpellHook *found = (SpellHook *)bsearch(
-        &key,
-        g_spell_hooks,
-        (size_t)g_hook_count,
-        sizeof(SpellHook),
-        hook_cmp
-    );
-
-    if (!found) {
+    SpellHandler h = ctx->sp->effect.handler;
+    if (h <= SPELL_HANDLER_NONE || h >= SPELL_HANDLER_COUNT || !g_handlers[h]) {
         return false;
     }
-
-    return found->handler(ctx);
+    return g_handlers[h](ctx);
 }
 
 /* =========================================================================
@@ -156,8 +127,8 @@ bool spell_router_dispatch(SpellContext *ctx) {
  * @new_type: Voxel type to apply.
  * @only_floor: If true, replaces VOXEL_FLOOR only (not walls or rocks).
  * Returns the number of cells modified.*/
-static int spell_terrain_stamp(Floor *floor, int cx, int cy, int radius,
-                                VoxelType new_type, bool only_floor) {
+static int spell_terrain_stamp(Floor *floor, int cx, int cy, int radius, VoxelType new_type,
+                               bool only_floor) {
     int changed = 0;
     int r2 = radius * radius;
 
@@ -188,113 +159,32 @@ static int spell_terrain_stamp(Floor *floor, int cx, int cy, int radius,
     return changed;
 }
 
-/*-----------------------------------------------------------------------
- * Wall of Stone — Causes walls of stone to emerge around the target.
- * Mechanic: Transform VOXEL_FLOORs adjacent to the target into VOXEL_WALLs.
- * The caster is never blocked (his cell remains free).
- * -------------------------------------------------------------------------*/
-static bool handle_wall_of_stone(SpellContext *ctx) {
-    Client *c  = ctx->caster;
-    SpellTemplate *sp = ctx->sp;
-
-    int tx = c->x;
-    int ty = c->y;
-
-    if (ctx->target) {
-        tx = ctx->target->x;
-        ty = ctx->target->y;
+void spell_router_terrain(Game *game, Client *c, const SpellTemplate *sp, int x, int y) {
+    static const struct {
+        VoxelType voxel;
+        const char *what;
+    } k_terrain[] = {
+        [SPELL_TERRAIN_WALL] = {VOXEL_WALL, "solidify into rough stone"},
+        [SPELL_TERRAIN_ICE] = {VOXEL_ICE, "are covered in slippery ice"},
+        [SPELL_TERRAIN_MUD] = {VOXEL_MUD, "are swallowed by the mud"},
+    };
+    SpellTerrain t = sp->effect.terrain;
+    if (t <= SPELL_TERRAIN_NONE || t > SPELL_TERRAIN_MUD || !game->world || c->floor_id < 0 ||
+        c->floor_id >= MAX_FLOORS) {
+        return;
     }
-
-    Floor *floor = &master_world->floors[c->floor_id];
-
-    int radius = (sp->radius > 0) ? sp->radius : 2;
-    int changed = spell_terrain_stamp(floor, tx, ty, radius, VOXEL_WALL, true);
-
-    /*The caster cell always remains passable*/
+    if (c->floor_id == 0) {
+        send_text_to_client(c->sock, "  > The wards of the town keep its ground as it is.");
+        return;
+    }
+    Floor *floor = &game->world->floors[c->floor_id];
+    int radius = sp->effect.radius > 0 ? sp->effect.radius : 2;
+    int changed = spell_terrain_stamp(floor, x, y, radius, k_terrain[t].voxel, true);
+    /*The caster's cell always stays passable.*/
     floor->map.data[0][c->y][c->x] = VOXEL_FLOOR;
-
-    send_text_to_client(c->sock,
-        "[MAGIC] Wall of Stone: A wall of living rock emerges from the ground!");
-    send_text_to_client(c->sock,
-        "> %d floor cells solidify into rough stone.",
-        changed);
-
-    server_log("MAGIC", "%s casts Wall of Stone at (%d,%d) [radius %d, %d cells].",
-               c->username, tx, ty, radius, changed);
-
-    return true;
-}
-
-/* -------------------------------------------------------------------------
- * Mud Field — Transforms the terrain into mud that slows enemies.
- * Mechanic: Converts VOXEL_FLOOR to VOXEL_MUD within a radius of the target.
- * Mud causes movement penalties (handled by the server_world tick).
- * ------------------------------------------------------------------------- */
-static bool handle_mud_field(SpellContext *ctx) {
-    Client *c  = ctx->caster;
-    SpellTemplate *sp = ctx->sp;
-
-    int tx = c->x;
-    int ty = c->y;
-
-    if (ctx->target) {
-        tx = ctx->target->x;
-        ty = ctx->target->y;
-    }
-
-    Floor *floor = &master_world->floors[c->floor_id];
-
-    int radius = (sp->radius > 0) ? sp->radius : 3;
-    int changed = spell_terrain_stamp(floor, tx, ty, radius, VOXEL_MUD, true);
-
-    send_text_to_client(c->sock,
-        "[MAGIC] Mud Field: The ground turns into sticky quagmires!");
-    send_text_to_client(c->sock,
-        "> %d cells are swallowed by the mud. Enemies will slow down.",
-        changed);
-
-    return true;
-}
-
-/* -------------------------------------------------------------------------
- * Ice Storm (Terrain variant) — Covers the terrain in ice.
- * Mechanics: Converts floor tiles to VOXEL_ICE. Ice can cause slipping
- * (Dexterity penalty, handled in movement ticks).
- * Note: the spell's base damage effect (AoE) is handled by the standard AoE
- * system; this hook adds ONLY the terrain modification.
- * ------------------------------------------------------------------------- */
-static bool handle_ice_storm_terrain(SpellContext *ctx) {
-    Client *c  = ctx->caster;
-    SpellTemplate *sp = ctx->sp;
-
-    int tx = c->x;
-    int ty = c->y;
-
-    if (ctx->target) {
-        tx = ctx->target->x;
-        ty = ctx->target->y;
-    }
-
-    Floor *floor = &master_world->floors[c->floor_id];
-
-    int radius = (sp->radius > 0) ? sp->radius : 4;
-    int changed = spell_terrain_stamp(floor, tx, ty, radius, VOXEL_ICE, true);
-
-    send_text_to_client(c->sock,
-        "[MAGIC] Ice Storm: the storm transforms the ground into a sheet of ice!");
-    send_text_to_client(c->sock,
-        "> %d cells are covered in slippery ice.", changed);
-
-    /*
-     * After modifying the terrain, we delegate the AoE damage to the
-     * standard system by calling aoe_resolve_spell. This hook is NOT to be
-     * considered a final endpoint: we return true to allow the processing
-     * to continue.
-     * NOTE: In this specific case we return true because we want
-     * full control over the message. AoE damage is applied separately
-     * by the calling logic if target_type is AOE.
-     */
-    return true;
+    send_text_to_client(c->sock, "  > %s: %d cells %s.", sp->name, changed, k_terrain[t].what);
+    server_log("MAGIC", "%s: %s at (%d,%d) floor %d [radius %d, %d cells].", c->username, sp->name,
+               x, y, c->floor_id, radius, changed);
 }
 
 /*============================================================================
@@ -302,33 +192,17 @@ static bool handle_ice_storm_terrain(SpellContext *ctx) {
  * CATEGORY 2: SUMMON — Summon Allied NPCs
  * ──────────────────────────────────── ─────────────────────────────────────
  *
- * Summoned NPCs are identified by the custom_name field with prefix
- * "[SUMMONED]". The AIContext.current_target_id is set to the caster for
- * indicates the "allied faction" and the Behavior Tree decides aggression
- * towards the player's enemies.
+ * Summoned NPCs carry the prefix "[SUMMONED]" in their name and the ally
+ * behavior (ai_make_ally): they fight the caster's enemies for the rounds
+ * of the spell, then leave.
  * ==========================================================================*/
 
-/**
- * find_free_npc_slot — Searches for a free slot in the global NPC array.
- * Returns the pointer to the first NPC with active == false, or NULL.*/
-static NPC *find_free_npc_slot(NPC *npcs) {
-    for (int i = 0; i < MAX_NPCS; i++) {
-        if (!npcs[i].active) {
-            return &npcs[i];
-        }
-    }
-    return NULL;
-}
+/*Tries the 8 cells around the caster, then further out.*/
+bool spell_find_spawn_cell(Game *game, Client *c, int *out_x, int *out_y) {
+    Floor *floor = &game->world->floors[c->floor_id];
 
-/**
- * find_spawn_cell — Searches for a free VOXEL_FLOOR cell adjacent to the caster.
- *Try the 8 cardinal + diagonal directions, then expand the radius.
- * Returns true and sets *out_x, *out_y if found.*/
-static bool find_spawn_cell(Client *c, int *out_x, int *out_y) {
-    Floor *floor = &master_world->floors[c->floor_id];
-
-    static const int dx[] = { 0,  1,  0, -1,  1, -1,  1, -1 };
-    static const int dy[] = {-1,  0,  1,  0, -1,  1,  1, -1 };
+    static const int dx[] = {0, 1, 0, -1, 1, -1, 1, -1};
+    static const int dy[] = {-1, 0, 1, 0, -1, 1, 1, -1};
 
     for (int i = 0; i < 8; i++) {
         int nx = c->x + dx[i];
@@ -338,8 +212,7 @@ static bool find_spawn_cell(Client *c, int *out_x, int *out_y) {
             continue;
         }
 
-        if (floor->map.data[0][ny][nx] == VOXEL_FLOOR &&
-            floor->entity_grid[ny][nx] == 0) {
+        if (voxel_is_ground(floor->map.data[0][ny][nx]) && floor->entity_grid[ny][nx] == 0) {
             *out_x = nx;
             *out_y = ny;
             return true;
@@ -360,8 +233,7 @@ static bool find_spawn_cell(Client *c, int *out_x, int *out_y) {
                 continue;
             }
 
-            if (floor->map.data[0][ny][nx] == VOXEL_FLOOR &&
-                floor->entity_grid[ny][nx] == 0) {
+            if (voxel_is_ground(floor->map.data[0][ny][nx]) && floor->entity_grid[ny][nx] == 0) {
                 *out_x = nx;
                 *out_y = ny;
                 return true;
@@ -377,98 +249,94 @@ static bool find_spawn_cell(Client *c, int *out_x, int *out_y) {
  * Chooses type based on surrounding terrain (fire/water/earth/air).
  * -------------------------------------------------------------------------*/
 static bool handle_summon_elemental(SpellContext *ctx) {
-    Client *c   = ctx->caster;
-    NPC   *npcs = ctx->npcs;
+    Client *c = ctx->caster;
+    Game *game = ctx->game;
 
-    NPC *slot = find_free_npc_slot(npcs);
+    NPC *slot = npc_alloc(game);
     if (!slot) {
         send_text_to_client(c->sock,
-            "[MAGIC] The ethereal plane is overcrowded: summoning failed!");
+                            "[MAGIC] The ethereal plane is overcrowded: summoning failed!");
         return true;
     }
 
     int sx = 0;
     int sy = 0;
 
-    if (!find_spawn_cell(c, &sx, &sy)) {
-        send_text_to_client(c->sock,
-            "[MAGIC] No free space to summon the elemental!");
+    if (!spell_find_spawn_cell(game, c, &sx, &sy)) {
+        send_text_to_client(c->sock, "[MAGIC] No free space to summon the elemental!");
         return true;
     }
 
     /*Choose the elemental type based on the voxel under the caster*/
-    Floor *floor = &master_world->floors[c->floor_id];
+    Floor *floor = &game->world->floors[c->floor_id];
     VoxelType under = floor->map.data[0][c->y][c->x];
 
     const char *elem_name = "Earth Elemental";
-    int elem_hp   = 40;
-    int elem_atk  = 5;
-    int elem_dmg  = 6;
-    int elem_ac   = 13;
+    int elem_hp = 40;
+    int elem_atk = 5;
+    int elem_dmg = 6;
+    int elem_ac = 13;
 
     if (under == VOXEL_LAVA || under == VOXEL_ASH) {
         elem_name = "Fire Elemental";
-        elem_hp   = 52;
-        elem_atk  = 7;
-        elem_dmg  = 8;
-        elem_ac   = 12;
+        elem_hp = 52;
+        elem_atk = 7;
+        elem_dmg = 8;
+        elem_ac = 12;
     } else if (under == VOXEL_WATER || under == VOXEL_ICE) {
         elem_name = "Water Elemental";
-        elem_hp   = 46;
-        elem_atk  = 6;
-        elem_dmg  = 6;
-        elem_ac   = 14;
+        elem_hp = 46;
+        elem_atk = 6;
+        elem_dmg = 6;
+        elem_ac = 14;
     } else if (under == VOXEL_GRASS || under == VOXEL_FLOOR) {
         elem_name = "Air Elemental";
-        elem_hp   = 38;
-        elem_atk  = 8;
-        elem_dmg  = 6;
-        elem_ac   = 15;
+        elem_hp = 38;
+        elem_atk = 8;
+        elem_dmg = 6;
+        elem_ac = 15;
     }
 
     /* Initialize the summoned NPC */
     memset(slot, 0, sizeof(NPC));
-    slot->entity_id       = next_id++;
-    /*Single entry point for the alive state (A2): the slot was just
-     *zeroed (template==NULL), so the floor cache is not touched —
-     *consistent with floor_stats_rebuild, which skips templateless slots.*/
-    npc_set_active(slot, true);
-    slot->archetype       = ARCH_MELEE;
-    slot->template        = NULL;
-    slot->template_idx    = -1;
-    slot->x               = sx;
-    slot->y               = sy;
-    slot->floor_id        = c->floor_id;
-    slot->hp              = elem_hp;
-    slot->max_hp          = elem_hp;
-    slot->ac              = elem_ac;
-    slot->attack_bonus    = elem_atk;
-    slot->damage_dice     = elem_dmg;
-    slot->damage_sides    = 1; /* fixed damage: flat elem_dmg */
-    slot->xp_reward       = 0; /*Summoning yields no XP*/
-    slot->gold_drop       = 0;
-    slot->morale          = 100;
-    slot->energy          = 0;
-    slot->spawn_x         = sx;
-    slot->spawn_y         = sy;
-    slot->respawn_timer   = 0;
+    slot->entity_id = game->next_id++;
+    /*Through npc_set_active: the slot was just zeroed (template==NULL), so
+     * the floor counters skip it, like floor_stats_rebuild does.*/
+    npc_set_active(game, slot, true);
+    slot->archetype = ARCH_MELEE;
+    slot->template = NULL;
+    slot->template_idx = -1;
+    slot->x = sx;
+    slot->y = sy;
+    slot->floor_id = c->floor_id;
+    slot->hp = elem_hp;
+    slot->max_hp = elem_hp;
+    slot->ac = elem_ac;
+    slot->attack_bonus = elem_atk;
+    slot->damage_dice = elem_dmg;
+    slot->damage_sides = 1; /* fixed damage: flat elem_dmg */
+    slot->xp_reward = 0;    /*Summoning yields no XP*/
+    slot->gold_drop = 0;
+    slot->morale = 100;
+    slot->energy = 0;
+    slot->spawn_x = -1; /*no spawn point: it never respawns*/
+    slot->spawn_y = -1;
+    slot->respawn_timer = 0;
+    /*It fought the caster: the default AI only knows characters as targets.*/
+    ai_make_ally(slot, c, ctx->sp->effect.rounds > 0 ? ctx->sp->effect.rounds : 30);
 
-    /*Ally Marker: The target_id points to the caster's entity_id*/
-    slot->ai_ctx.current_target_id = c->entity_id;
-
-    snprintf(slot->custom_name, sizeof(slot->custom_name),
-             "[SUMMONED] %s", elem_name);
+    snprintf(slot->custom_name, sizeof(slot->custom_name), "[SUMMONED] %s", elem_name);
 
     /* Update the entity grid */
     floor->entity_grid[sy][sx] = slot->entity_id;
 
-    send_text_to_client(c->sock,
-        "[MAGIC] Summon Elemental: a %s materializes from the ethereal plane!", elem_name);
-    send_text_to_client(c->sock,
-        "  > The entity (HP:%d AC:%d) will follow you into battle.", elem_hp, elem_ac);
+    send_text_to_client(c->sock, "[MAGIC] %s: a %s materializes from the ethereal plane!",
+                        ctx->sp->name, elem_name);
+    send_text_to_client(c->sock, "  > The entity (HP:%d AC:%d) fights for you for %d rounds.",
+                        elem_hp, elem_ac, slot->ai_ctx.state_timer);
 
-    server_log("MAGIC", "%s summons %s (ID:%d) at (%d,%d) floor %d.",
-               c->username, elem_name, slot->entity_id, sx, sy, c->floor_id);
+    server_log("MAGIC", "%s summons %s (ID:%d) at (%d,%d) floor %d.", c->username, elem_name,
+               slot->entity_id, sx, sy, c->floor_id);
 
     return true;
 }
@@ -478,57 +346,68 @@ static bool handle_summon_elemental(SpellContext *ctx) {
  * Finds the nearest inactive NPC on the same floor.
  * -------------------------------------------------------------------------*/
 static bool handle_animate_dead(SpellContext *ctx) {
-    Client *c   = ctx->caster;
-    NPC   *npcs = ctx->npcs;
+    Client *c = ctx->caster;
+    Game *game = ctx->game;
 
     /*Search for a nearby corpse (NPC not active with valid template)*/
     NPC *corpse = NULL;
-    int  min_d  = 8; /*maximum summon range*/
+    int min_d = 8; /*maximum summon range*/
 
     for (int i = 0; i < MAX_NPCS; i++) {
-        if (npcs[i].active) {
+        if (game->npcs[i].active) {
             continue;
         }
-        if (npcs[i].template == NULL) {
+        /*Remains of a monster: not a ghost (a character's bones), not
+         * loot, not a merchant, nothing waiting in no spawn point.*/
+        const NPC *n = &game->npcs[i];
+        if (n->template == NULL || n->is_ghost || n->respawn_timer <= 0 ||
+            n->archetype == ARCH_MERCHANT || n->archetype == ARCH_TREASURE ||
+            n->archetype == ARCH_GOLD) {
             continue;
         }
-        if (npcs[i].floor_id != c->floor_id) {
+        if (game->npcs[i].floor_id != c->floor_id) {
             continue;
         }
 
-        int d = abs(npcs[i].x - c->x) + abs(npcs[i].y - c->y);
+        int d = abs(game->npcs[i].x - c->x) + abs(game->npcs[i].y - c->y);
         if (d < min_d) {
-            min_d  = d;
-            corpse = &npcs[i];
+            min_d = d;
+            corpse = &game->npcs[i];
         }
     }
 
     if (!corpse) {
         send_text_to_client(c->sock,
-            "[MAGIC] Animate Dead: There are no corpses nearby to reanimate.");
+                            "[MAGIC] Animate Dead: There are no corpses nearby to reanimate.");
         return true;
     }
 
-    /*Reactivate the corpse as an undead ally (the corpse has a template,
-     *so npc_set_active also bumps the floor cache — A2)*/
-    npc_set_active(corpse, true);
-    corpse->hp                  = corpse->max_hp / 2; /* revives with half HP */
-    corpse->xp_reward           = 0;
-    corpse->gold_drop           = 0;
-    corpse->ai_ctx.current_target_id = c->entity_id; /* allied faction */
+    /*It rises next to the caster: where it fell may be taken.*/
+    int sx = 0, sy = 0;
+    if (!spell_find_spawn_cell(game, c, &sx, &sy)) {
+        send_text_to_client(c->sock, "[MAGIC] Animate Dead: no free space for the dead to rise.");
+        return true;
+    }
+    corpse->x = sx;
+    corpse->y = sy;
+    /*Reactivate the corpse as an undead ally (it has a template, so
+     * npc_set_active also counts it on the floor)*/
+    npc_set_active(game, corpse, true);
+    corpse->hp = corpse->max_hp / 2; /* revives with half HP */
+    corpse->respawn_timer = 0;
+    corpse->effect_count = 0;
+    ai_make_ally(corpse, c, ctx->sp->effect.rounds > 0 ? ctx->sp->effect.rounds : 30);
 
     const char *original = corpse->template ? corpse->template->name : "Creature";
-    snprintf(corpse->custom_name, sizeof(corpse->custom_name),
-             "[SUMMONED] Skeleton of %s", original);
+    snprintf(corpse->custom_name, sizeof(corpse->custom_name), "[SUMMONED] Skeleton of %s",
+             original);
 
-    Floor *floor = &master_world->floors[c->floor_id];
+    Floor *floor = &game->world->floors[c->floor_id];
     floor->entity_grid[corpse->y][corpse->x] = corpse->entity_id;
 
-    send_text_to_client(c->sock,
-        "[MAGIC] Animate Dead: The bones of the %s rise at your command!", original);
-    send_text_to_client(c->sock,
-        "  > The skeleton (HP:%d) is ready to fight for you.",
-        corpse->hp);
+    send_text_to_client(c->sock, "[MAGIC] Animate Dead: The bones of the %s rise at your command!",
+                        original);
+    send_text_to_client(c->sock, "  > The skeleton (HP:%d) is ready to fight for you.", corpse->hp);
 
     return true;
 }
@@ -539,119 +418,94 @@ static bool handle_animate_dead(SpellContext *ctx) {
  * ─────────────────────────────────────────────────────────────────────────
  * ========================================================================= */
 
+/*The target's saving throw (the effect's save, normally Wisdom) against
+ * the caster's spell DC; true if it resists. *dc receives the DC.*/
+static bool mind_save(const SpellContext *ctx, int *dc) {
+    SpellCaster sc;
+    spell_caster_of(ctx->caster, &sc);
+    *dc = spell_save_dc(&ctx->sp->effect, &sc);
+    const NPC *n = ctx->target;
+    return rules_roll_save(npc_save_bonus(n), *dc, n->template && n->template->magic_resistance,
+                           false, NULL);
+}
+
+/*A creature immune to the Charmed condition (its description says so)
+ * cannot be charmed nor dominated: true after telling the caster.*/
+static bool charm_immune(const SpellContext *ctx) {
+    const NPC *n = ctx->target;
+    if (!n->template || !n->template->condition_immunities[COND_CHARMED]) {
+        return false;
+    }
+    send_text_to_client(ctx->caster->sock, "[MAGIC] %s cannot be charmed: %s has no effect.",
+                        npc_name(n), ctx->sp->name);
+    return true;
+}
+
+static void mind_effect(NPC *tgt, const char *name, int rounds) {
+    ActiveEffect fx;
+    memset(&fx, 0, sizeof(fx));
+    fx.name = name;
+    fx.trigger = EVENT_ON_TURN_START;
+    fx.duration_rounds = rounds;
+    rules_add_effect(tgt->effects, &tgt->effect_count, MAX_EFFECTS_PER_ENTITY, &fx);
+}
+
 /*-----------------------------------------------------------------------
- * Charm Person — Charms a target humanoid temporarily
- * ally. The target stops attacking the caster for N rounds.
- * Mechanic: Set current_target_id = -1 (no target) and apply
- * the "Charmed" status effect that suppresses aggression.
+ * Charm Person — the target stops attacking the caster for the effect's
+ * rounds: its AI target is cleared and it takes the Charmed condition.
  * -------------------------------------------------------------------------*/
 static bool handle_charm_person(SpellContext *ctx) {
-    Client       *c  = ctx->caster;
-    SpellTemplate *sp = ctx->sp;
-    NPC          *tgt = ctx->target;
-
+    Client *c = ctx->caster;
+    NPC *tgt = ctx->target;
     if (!tgt) {
-        send_text_to_client(c->sock,
-            "[MAGIC] Charm Person: No targets in range.");
+        send_text_to_client(c->sock, "[MAGIC] %s: no target in range.", ctx->sp->name);
         return true;
     }
-
-    /*Wisdom saving throw against the caster's DC*/
-    int dc = 8 + rules_get_modifier(c->intel) + 2; /* +2 proficiency */
-    bool saved = rules_roll_save(10, dc, false, false, NULL);
-
-    if (saved) {
-        send_text_to_client(c->sock,
-            "[MAGIC] %s resists your charm! (Successful save)",
-            tgt->template ? tgt->template->name : "???");
+    if (charm_immune(ctx)) {
         return true;
     }
-
-    /*Apply the charm: reset the AI ​​target and mark as charmed*/
-    tgt->ai_ctx.current_target_id = -1; /*no active targets*/
-
-    if (tgt->effect_count < MAX_EFFECTS_PER_ENTITY) {
-        ActiveEffect charm_fx;
-        memset(&charm_fx, 0, sizeof(charm_fx));
-        charm_fx.name = "Charmed";
-        charm_fx.duration_rounds = sp->status_effect.duration_rounds > 0
-                                   ? sp->status_effect.duration_rounds
-                                   : 5;
-        tgt->effects[tgt->effect_count++] = charm_fx;
+    int dc = 0;
+    if (mind_save(ctx, &dc)) {
+        send_text_to_client(c->sock, "[MAGIC] %s resists your charm! (save vs DC %d)",
+                            npc_name(tgt), dc);
+        return true;
     }
-
-    send_text_to_client(c->sock,
-        "[MAGIC] Charm Person: %s gazes at you dreamily... they are under your control!",
-        tgt->template ? tgt->template->name : "???");
-    send_text_to_client(c->sock,
-        "> Effect lasts %d rounds (Failed Sag DC%d save).",
-        sp->status_effect.duration_rounds > 0 ? sp->status_effect.duration_rounds : 5,
-        dc);
-
-    server_log("MAGIC", "%s charms %s (ID:%d) with Charm Person.",
-               c->username,
-               tgt->template ? tgt->template->name : "???",
-               tgt->entity_id);
-
+    tgt->ai_ctx.current_target_id = -1;
+    mind_effect(tgt, condition_to_name(COND_CHARMED), ctx->sp->effect.rounds);
+    send_text_to_client(c->sock, "[MAGIC] %s: %s gazes at you dreamily... charmed for %d rounds.",
+                        ctx->sp->name, npc_name(tgt), ctx->sp->effect.rounds);
+    server_log("MAGIC", "%s charms %s (ID:%d) with %s.", c->username, npc_name(tgt), tgt->entity_id,
+               ctx->sp->name);
     return true;
 }
 
 /*-----------------------------------------------------------------------
- * Dominate Monster — Same as Charm Person but without saving throw and on any
-* creatures. The creature becomes a permanent ally until the end of
- * combat (or until it takes damage from the caster).
+ * Dominate Monster — the target fights for the caster for the effect's
+ * rounds.
  * -------------------------------------------------------------------------*/
 static bool handle_dominate_monster(SpellContext *ctx) {
-    Client       *c  = ctx->caster;
-    SpellTemplate *sp = ctx->sp;
-    NPC          *tgt = ctx->target;
-
+    Client *c = ctx->caster;
+    NPC *tgt = ctx->target;
     if (!tgt) {
-        send_text_to_client(c->sock,
-            "[MAGIC] Dominate Monster: No targets in range.");
+        send_text_to_client(c->sock, "[MAGIC] %s: no target in range.", ctx->sp->name);
         return true;
     }
-
-    /*Wisdom saving throw with disadvantage (roll 2 dice, take the worst)*/
-    int dc = 8 + rules_get_modifier(c->intel) + 2;
-    int roll1 = rules_roll_dice(1, 20);
-    int roll2 = rules_roll_dice(1, 20);
-    int worst = (roll1 < roll2) ? roll1 : roll2;
-    int mod   = rules_get_modifier(10); /* Base NPC Wisdom (10 = no modifier) */
-    bool saved = (worst + mod >= dc);
-
-    if (saved) {
-        send_text_to_client(c->sock,
-            "[MAGIC] %s resists domination! (Save with disadvantage: %d vs DC%d)",
-            tgt->template ? tgt->template->name : "???",
-            worst + mod,
-            dc);
+    if (charm_immune(ctx)) {
         return true;
     }
-
-    tgt->ai_ctx.current_target_id = c->entity_id; /* full allied faction */
-
-    if (tgt->effect_count < MAX_EFFECTS_PER_ENTITY) {
-        ActiveEffect dom_fx;
-        memset(&dom_fx, 0, sizeof(dom_fx));
-        dom_fx.name = "Dominated";
-        dom_fx.duration_rounds = sp->status_effect.duration_rounds > 0
-                                 ? sp->status_effect.duration_rounds
-                                 : 10;
-        tgt->effects[tgt->effect_count++] = dom_fx;
+    int dc = 0;
+    if (mind_save(ctx, &dc)) {
+        send_text_to_client(c->sock, "[MAGIC] %s resists domination! (save vs DC %d)",
+                            npc_name(tgt), dc);
+        return true;
     }
-
-    snprintf(tgt->custom_name, sizeof(tgt->custom_name),
-             "[DOMINATED] %s",
+    ai_make_ally(tgt, c, ctx->sp->effect.rounds);
+    mind_effect(tgt, "Dominated", ctx->sp->effect.rounds);
+    snprintf(tgt->custom_name, sizeof(tgt->custom_name), "[DOMINATED] %s",
              tgt->template ? tgt->template->name : "Creature");
-
-    send_text_to_client(c->sock,
-        "[MAGIC] Dominate Monster: %s's mind yields to your will!",
-        tgt->template ? tgt->template->name : "???");
-    send_text_to_client(c->sock,
-        "  > The creature will fight for you for %d rounds.",
-        sp->status_effect.duration_rounds > 0 ? sp->status_effect.duration_rounds : 10);
-
+    send_text_to_client(c->sock, "[MAGIC] %s: %s's mind yields to your will for %d rounds!",
+                        ctx->sp->name, tgt->template ? tgt->template->name : "the creature",
+                        ctx->sp->effect.rounds);
     return true;
 }
 
@@ -667,8 +521,9 @@ static bool handle_dominate_monster(SpellContext *ctx) {
  * For now implemented as "Teleport random" (basic version).
  * -------------------------------------------------------------------------*/
 static bool handle_teleport(SpellContext *ctx) {
+    Game *game = ctx->game;
     Client *c = ctx->caster;
-    Floor  *floor = &master_world->floors[c->floor_id];
+    Floor *floor = &game->world->floors[c->floor_id];
 
     /* Collect available free cells */
     int free_xs[256];
@@ -678,8 +533,7 @@ static bool handle_teleport(SpellContext *ctx) {
     /*Sparse sampling for performance (checks 1/16 of cells)*/
     for (int y = 2; y < MAP_HEIGHT - 2 && free_count < 256; y += 4) {
         for (int x = 2; x < MAP_WIDTH - 2 && free_count < 256; x += 4) {
-            if (floor->map.data[0][y][x] == VOXEL_FLOOR &&
-                floor->entity_grid[y][x] == 0) {
+            if (voxel_is_ground(floor->map.data[0][y][x]) && floor->entity_grid[y][x] == 0) {
                 free_xs[free_count] = x;
                 free_ys[free_count] = y;
                 free_count++;
@@ -689,7 +543,7 @@ static bool handle_teleport(SpellContext *ctx) {
 
     if (free_count == 0) {
         send_text_to_client(c->sock,
-            "[MAGIC] Teleport: the spatial fabric is unstable, teleport failed!");
+                            "[MAGIC] Teleport: the spatial fabric is unstable, teleport failed!");
         return true;
     }
 
@@ -707,14 +561,12 @@ static bool handle_teleport(SpellContext *ctx) {
     /*Update the grid*/
     floor->entity_grid[c->y][c->x] = c->entity_id;
 
-    send_text_to_client(c->sock,
-        "[MAGIC] Teleport: a rip in the ether sucks you in...");
-    send_text_to_client(c->sock,
-        "> You materialize in (%d,%d). [Previous: (%d,%d)]",
-        c->x, c->y, old_x, old_y);
+    send_text_to_client(c->sock, "[MAGIC] Teleport: a rip in the ether sucks you in...");
+    send_text_to_client(c->sock, "> You materialize in (%d,%d). [Previous: (%d,%d)]", c->x, c->y,
+                        old_x, old_y);
 
-    server_log("MAGIC", "%s teleports from (%d,%d) to (%d,%d) [floor %d].",
-               c->username, old_x, old_y, c->x, c->y, c->floor_id);
+    server_log("MAGIC", "%s teleports from (%d,%d) to (%d,%d) [floor %d].", c->username, old_x,
+               old_y, c->x, c->y, c->floor_id);
 
     return true;
 }
@@ -725,36 +577,33 @@ static bool handle_teleport(SpellContext *ctx) {
  * The AI ​​in ai.c ignores targets with this status in target calculation.
  * -------------------------------------------------------------------------*/
 static bool handle_invisibility(SpellContext *ctx) {
-    Client       *c  = ctx->caster;
-    SpellTemplate *sp = ctx->sp;
+    Client *c = ctx->caster;
+    const SpellTemplate *sp = ctx->sp;
 
     if (c->effect_count >= MAX_EFFECTS_PER_ENTITY) {
         send_text_to_client(c->sock,
-            "[MAGIC] You cannot sustain other magical effects at the same time.");
+                            "[MAGIC] You cannot sustain other magical effects at the same time.");
         return true;
     }
 
     /* Check if already invisible */
     for (int i = 0; i < c->effect_count; i++) {
-        if (strncmp(c->effects[i].name, "Invisible", 9) == 0) {
-            send_text_to_client(c->sock,
-                "[MAGIC] You are already invisible (%d rounds remaining).",
-                c->effects[i].duration_rounds);
+        if (strcmp(c->effects[i].name, condition_to_name(COND_INVISIBLE)) == 0) {
+            send_text_to_client(c->sock, "[MAGIC] You are already invisible (%d rounds remaining).",
+                                c->effects[i].duration_rounds);
             return true;
         }
     }
 
     ActiveEffect invis_fx;
     memset(&invis_fx, 0, sizeof(invis_fx));
-    invis_fx.name = "Invisible";
-    invis_fx.duration_rounds = sp->status_effect.duration_rounds > 0
-                               ? sp->status_effect.duration_rounds
-                               : 5;
+    invis_fx.name = condition_to_name(COND_INVISIBLE);
+    invis_fx.duration_rounds = sp->effect.rounds > 0 ? sp->effect.rounds : 5;
     c->effects[c->effect_count++] = invis_fx;
 
-    send_text_to_client(c->sock,
-        "[MAGIC] Invisibility: Your body dissolves into the air!");
-    send_text_to_client(c->sock,
+    send_text_to_client(c->sock, "[MAGIC] %s: Your body dissolves into the air!", sp->name);
+    send_text_to_client(
+        c->sock,
         "  > You are invisible for %d rounds. Attacking or casting spells will end the effect.",
         invis_fx.duration_rounds);
 
@@ -767,8 +616,9 @@ static bool handle_invisibility(SpellContext *ctx) {
  *random direction. Safe: it doesn't end up inside the walls.
  * -------------------------------------------------------------------------*/
 static bool handle_blink(SpellContext *ctx) {
-    Client *c     = ctx->caster;
-    Floor  *floor = &master_world->floors[c->floor_id];
+    Game *game = ctx->game;
+    Client *c = ctx->caster;
+    Floor *floor = &game->world->floors[c->floor_id];
 
     int blink_dist = 5 + rules_roll_dice(1, 6); /* 5-10 cells */
 
@@ -788,8 +638,7 @@ static bool handle_blink(SpellContext *ctx) {
             continue;
         }
 
-        if (floor->map.data[0][ny][nx] == VOXEL_FLOOR &&
-            floor->entity_grid[ny][nx] == 0) {
+        if (voxel_is_ground(floor->map.data[0][ny][nx]) && floor->entity_grid[ny][nx] == 0) {
             landed_x = nx;
             landed_y = ny;
         }
@@ -797,7 +646,7 @@ static bool handle_blink(SpellContext *ctx) {
 
     if (landed_x < 0) {
         send_text_to_client(c->sock,
-            "[MAGIC] Blink: the ethereal plane repels you, no free space!");
+                            "[MAGIC] Blink: the ethereal plane repels you, no free space!");
         return true;
     }
 
@@ -810,11 +659,11 @@ static bool handle_blink(SpellContext *ctx) {
 
     floor->entity_grid[c->y][c->x] = c->entity_id;
 
-    send_text_to_client(c->sock,
+    send_text_to_client(
+        c->sock,
         "[MAGIC] Blink: a flash of light and you vanish... only to reappear %d cells away!",
         blink_dist);
-    send_text_to_client(c->sock,
-        "> From (%d,%d) to (%d,%d).", old_x, old_y, c->x, c->y);
+    send_text_to_client(c->sock, "> From (%d,%d) to (%d,%d).", old_x, old_y, c->x, c->y);
 
     return true;
 }
@@ -835,24 +684,26 @@ static bool handle_blink(SpellContext *ctx) {
 
 /*Spiral search around (cx,cy) for a free, walkable tile.
  * Returns true and stores the result in *ox,*oy.*/
-static bool transit_find_free_tile(Floor *fl, int cx, int cy,
-                                   int *ox, int *oy) {
+static bool transit_find_free_tile(Floor *fl, int cx, int cy, int *ox, int *oy) {
     for (int r = 0; r < 80; r++) {
         for (int dy = -r; dy <= r; dy++) {
             for (int dx = -r; dx <= r; dx++) {
                 /*Only walk the ring of this radius (r=0 is the center)*/
-                if (r > 0 && abs(dx) != r && abs(dy) != r)
+                if (r > 0 && abs(dx) != r && abs(dy) != r) {
                     continue;
+                }
                 int nx = cx + dx;
                 int ny = cy + dy;
-                if (nx < 1 || nx >= MAP_WIDTH - 1 ||
-                    ny < 1 || ny >= MAP_HEIGHT - 1)
+                if (nx < 1 || nx >= MAP_WIDTH - 1 || ny < 1 || ny >= MAP_HEIGHT - 1) {
                     continue;
+                }
                 VoxelType vt = fl->map.data[0][ny][nx];
-                if (vt == VOXEL_WALL || vt == VOXEL_ROCK)
+                if (vt == VOXEL_WALL || vt == VOXEL_ROCK) {
                     continue;
-                if (fl->entity_grid[ny][nx] != 0)
+                }
+                if (fl->entity_grid[ny][nx] != 0) {
                     continue;
+                }
                 *ox = nx;
                 *oy = ny;
                 return true;
@@ -868,9 +719,13 @@ static bool transit_find_dungeon_entry(Floor *fl, int *ox, int *oy) {
     int any_x = -1, any_y = -1;
     for (int iy = 0; iy < MAP_HEIGHT; iy++) {
         for (int ix = 0; ix < MAP_WIDTH; ix++) {
-            if (fl->map.data[0][iy][ix] != VOXEL_STAIRS_UP)
+            if (fl->map.data[0][iy][ix] != VOXEL_STAIRS_UP) {
                 continue;
-            if (any_x < 0) { any_x = ix; any_y = iy; }
+            }
+            if (any_x < 0) {
+                any_x = ix;
+                any_y = iy;
+            }
             if (fl->entity_grid[iy][ix] == 0) {
                 *ox = ix;
                 *oy = iy;
@@ -888,57 +743,60 @@ static bool transit_find_dungeon_entry(Floor *fl, int *ox, int *oy) {
 
 /*-----------------------------------------------------------------------------
  * handle_class_transit — surface <-> deepest explored floor.
- * Shared by the 12 innate class cantrips (Ancestral Totem Call, The Last
+ * Shared by the 12 class transit cantrips (Ancestral Totem Call, The Last
  * Refrain, Divine Recall, The Green Path, Warrior's March, Flowing Step,
  * Oathbound Passage, Hunter's Trail, The Back Door, Bloodline Rift,
- * Pact Passage, Arcane Transit).
+ * Pact Passage, Arcane Transit) and the travel spells (Word of Recall,
+ * Plane Shift, Teleportation Circle, Transport via Plants, Wind Walk,
+ * Astral Projection).
  * -------------------------------------------------------------------------*/
 static bool handle_class_transit(SpellContext *ctx) {
+    Game *game = ctx->game;
     Client *c = ctx->caster;
-    if (!c || !master_world)
+    if (!c || !game->world) {
         return true;
+    }
 
     /*--- Decide the destination floor ---*/
     int target_floor;
     if (c->floor_id == 0) {
         if (c->max_floor_explored <= 0) {
             send_text_to_client(c->sock,
-                "[MAGIC] %s: the way is not yet known. Descend into the"
-                " dungeon and explore at least one level before you can"
-                " call it back.",
-                ctx->sp->name);
+                                "[MAGIC] %s: the way is not yet known. Descend into the"
+                                " dungeon and explore at least one level before you can"
+                                " call it back.",
+                                ctx->sp->name);
             return true;
         }
-        if (c->max_floor_explored >= MAX_FLOORS)
+        if (c->max_floor_explored >= MAX_FLOORS) {
             c->max_floor_explored = MAX_FLOORS - 1;
+        }
         target_floor = c->max_floor_explored;
     } else {
         target_floor = 0;
     }
 
-    Floor *fl = &master_world->floors[target_floor];
+    Floor *fl = &game->world->floors[target_floor];
 
     /*--- Find a safe landing tile ---*/
     int lx = -1, ly = -1;
     if (target_floor == 0) {
         if (!transit_find_free_tile(fl, MAP_CENTER_X, MAP_CENTER_Y, &lx, &ly)) {
-            send_text_to_client(c->sock,
-                "[MAGIC] %s: the path collapses before you can cross it!",
-                ctx->sp->name);
+            send_text_to_client(c->sock, "[MAGIC] %s: the path collapses before you can cross it!",
+                                ctx->sp->name);
             return true;
         }
     } else {
         if (!transit_find_dungeon_entry(fl, &lx, &ly) &&
             !transit_find_free_tile(fl, MAP_CENTER_X, MAP_CENTER_Y, &lx, &ly)) {
-            send_text_to_client(c->sock,
-                "[MAGIC] %s: the path collapses before you can cross it!",
-                ctx->sp->name);
+            send_text_to_client(c->sock, "[MAGIC] %s: the path collapses before you can cross it!",
+                                ctx->sp->name);
             return true;
         }
     }
 
     /*--- Perform the transit ---*/
-    master_world->floors[c->floor_id].entity_grid[c->y][c->x] = 0;
+    game->world->floors[c->floor_id].entity_grid[c->y][c->x] = 0;
     int old_floor = c->floor_id;
     int old_x = c->x, old_y = c->y;
 
@@ -950,31 +808,30 @@ static bool handle_class_transit(SpellContext *ctx) {
 
     /*The player changed floor: remove him from the clients still on the
     * old floor (hp<=0 message) and announce him to the new floor.*/
-    notify_player_left_floor(c, old_floor);
-    broadcast_player_state(c);
+    notify_player_left_floor(game, c, old_floor);
+    broadcast_player_state(game, c);
 
     if (target_floor > old_floor) {
         send_text_to_client(c->sock,
-            "[MAGIC] %s: the world folds around you... you emerge on Floor %d"
-            " (%d,%d).",
-            ctx->sp->name, target_floor, lx, ly);
+                            "[MAGIC] %s: the world folds around you... you emerge on Floor %d"
+                            " (%d,%d).",
+                            ctx->sp->name, target_floor, lx, ly);
     } else {
         send_text_to_client(c->sock,
-            "[MAGIC] %s: the world folds around you... you emerge back on"
-            " the surface (%d,%d).",
-            ctx->sp->name, lx, ly);
+                            "[MAGIC] %s: the world folds around you... you emerge back on"
+                            " the surface (%d,%d).",
+                            ctx->sp->name, lx, ly);
     }
-    send_text_to_client(c->sock,
-        "  > From Floor %d (%d,%d) to Floor %d (%d,%d).",
-        old_floor, old_x, old_y, c->floor_id, c->x, c->y);
+    send_text_to_client(c->sock, "  > From Floor %d (%d,%d) to Floor %d (%d,%d).", old_floor, old_x,
+                        old_y, c->floor_id, c->x, c->y);
 
     /*--- Sync the client with the new floor ---*/
-    send_detailed_state(c);
+    send_detailed_state(game, c);
     send_map_chunk(c->sock, &fl->map, c->x, c->y, INITIAL_VIEW_RADIUS);
-    broadcast_nearby_entities(c, g_npcs);
+    broadcast_nearby_entities(c, game);
     save_player_data(c);
 
-    server_log("MAGIC", "%s used %s: floor %d -> %d (%d,%d).",
-               c->username, ctx->sp->name, old_floor, target_floor, lx, ly);
+    server_log("MAGIC", "%s used %s: floor %d -> %d (%d,%d).", c->username, ctx->sp->name,
+               old_floor, target_floor, lx, ly);
     return true;
 }

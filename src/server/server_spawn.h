@@ -32,29 +32,31 @@
 
 /**
  * populate_dungeons - Populate all floors of the dungeon with NPCs and creatures.
- * @npcs: Array of NPCs.
- * @next_id: Pointer to the unique ID counter.*/
-void populate_dungeons(NPC *npcs, int *next_id);
+ */
+void populate_dungeons(Game *game);
+
+/*The guardian of boss floor f in slot b: a creature of the floor's range
+ * that the data calls a boss (any creature of the range when none is),
+ * promoted to ARCH_BOSS on the free open ground nearest the centre.
+ * False, with b untouched, when the floor has no ground or no creature.*/
+bool spawn_floor_boss(Game *game, NPC *b, int f);
 
 /**
  * spawn_city_merchants - Generates city merchants (floor 0).
- * @npcs: Array of NPCs.
- * @next_id: Pointer to the unique ID counter.*/
-void spawn_city_merchants(NPC *npcs, int *next_id);
+ */
+void spawn_city_merchants(Game *game);
 
 /**
  * spawn_magic_shops - Spawns magic shops on the deep planes.
- * @npcs: Array of NPCs.
- * @next_id: Pointer to the unique ID counter.*/
-void spawn_magic_shops(NPC *npcs, int *next_id);
+ */
+void spawn_magic_shops(Game *game);
 
 /**
  * spawn_martial_archive - Spawns "The Archive of a Thousand Battles",
  * the floor-0 bookshop for the martial classes (Fighter, Barbarian,
  * Rogue, Monk). Occupies NPC slot 10.
- * @npcs: Array of NPCs.
- * @next_id: Pointer to the unique ID counter.*/
-void spawn_martial_archive(NPC *npcs, int *next_id);
+ */
+void spawn_martial_archive(Game *game);
 
 /**
  * add_item_to_shop - Adds an item to a merchant's inventory.
@@ -64,6 +66,6 @@ void spawn_martial_archive(NPC *npcs, int *next_id);
  *
  * Exposed to allow the 'dm_shop' DM command to add items
  * dynamically to a merchant's inventory during the game.*/
-void add_item_to_shop(NPC *n, int template_idx, int stock);
+void add_item_to_shop(MerchantData *m, int template_idx, int stock);
 
 #endif /* SERVER_SPAWN_H */

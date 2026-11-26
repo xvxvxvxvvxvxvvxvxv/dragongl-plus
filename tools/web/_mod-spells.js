@@ -1,3 +1,5 @@
+/* Dragon GL - Copyright (C) 2026 Nicola Taibi
+   SPDX-License-Identifier: GPL-3.0-or-later */
 /* ============================================================
    DRAGONGL · DATA STUDIO — Spells module config
    ============================================================ */
@@ -30,6 +32,44 @@ window.DGL_CFG = (() => {
     'paladin', 'ranger', 'rogue', 'sorcerer', 'warlock', 'wizard'];
   const classesOf = m => splitList(m.classes);
 
+  const KINDS = {
+    damage:    { c: '#f87171', l: 'Damage' },
+    heal:      { c: '#4ade80', l: 'Heal' },
+    condition: { c: '#c084fc', l: 'Condition' },
+    buff:      { c: '#60a5fa', l: 'Buff' },
+    utility:   { c: '#94a3b8', l: 'Utility' },
+    special:   { c: '#fbbf24', l: 'Special' },
+  };
+  const kindOf = m => KINDS[m.effect && m.effect.kind] || { c: '#94a3b8', l: '—' };
+
+  /* One line for the engine effect: "8d6 fire · circle r4 @30 · DEX save, half". */
+  const effectLine = e => {
+    if (!e || typeof e !== 'object') return '—';
+    const p = [];
+    if (e.dice) {
+      let d = e.dice.count ? `${e.dice.count}d${e.dice.sides}` : '';
+      if (e.dice.bonus) d += (d ? '+' : '') + e.dice.bonus;
+      if (e.dice.add) d += `+${e.dice.add.toUpperCase()}`;
+      p.push(d + (e.damage_type ? ` ${e.damage_type}` : '') + (e.kind === 'heal' ? ' HP' : ''));
+      if (e.upcast) {
+        const u = e.upcast;
+        let x = u.count ? `${u.count}d${u.sides}` : '';
+        if (u.bonus) x += (x ? '+' : '') + u.bonus;
+        p.push(`+${x} per ${u.per === 2 ? '2 slot levels' : 'slot level'}`);
+      }
+    }
+    if (e.stat) p.push(`+${e.value} ${e.stat}`);
+    if (e.handler) p.push(`handler ${e.handler}`);
+    p.push(e.target + (e.radius ? ` r${e.radius}` : '') + (e.range ? ` @${e.range}` : ''));
+    if (e.roll === 'attack') p.push('spell attack');
+    if (e.roll === 'save') p.push(`${(e.save || '').toUpperCase()} save${e.on_save === 'half' ? ', half' : ''}`);
+    if (e.condition) p.push(`${e.condition}${e.roll !== 'save' && e.save ? ` (${e.save.toUpperCase()} save)` : ''}`);
+    if (e.rounds) p.push(`${e.rounds} rounds`);
+    if (e.dc) p.push(`DC ${e.dc}`);
+    if (e.terrain) p.push(`terrain ${e.terrain}`);
+    return p.join(' · ');
+  };
+
   const vfxOrb = v => {
     if (!v || typeof v !== 'object') return dash;
     const r = Math.round(num(v.r) * 255), g = Math.round(num(v.g) * 255), b = Math.round(num(v.b) * 255);
@@ -50,6 +90,7 @@ window.DGL_CFG = (() => {
       duration: 'Instantaneous', ritual: '', casting_time: '1 action', range: '30 feet',
       component_v: '1', component_s: '', component_m: '', materials: '',
       vfx: { type: 0, r: 0.8, g: 0.8, b: 0.8 },
+      effect: { kind: 'utility', target: 'self', range: 0 },
     }),
 
     columns: [
@@ -59,6 +100,8 @@ window.DGL_CFG = (() => {
         render: m => badge(lvl(m.level).l, lvl(m.level).c) },
       { id: 'school', label: 'School', sortVal: m => m.school || '',
         render: m => badge(school(m.school).l, school(m.school).c) },
+      { id: 'effect', label: 'Effect', sortVal: m => (m.effect && m.effect.kind) || '',
+        render: m => badge(kindOf(m).l, kindOf(m).c) },
       { id: 'casting_time', label: 'Cast time', sortVal: m => m.casting_time || '',
         render: m => m.casting_time ? `<span class="dimtxt">${esc(m.casting_time)}</span>` : dash },
       { id: 'range', label: 'Range', sortVal: m => m.range || '',
@@ -83,6 +126,9 @@ window.DGL_CFG = (() => {
       { id: 'school', label: 'School',
         options: () => Object.entries(SCHOOLS).map(([k, v]) => [k, v.l]),
         apply: (m, f) => !f || m.school === f },
+      { id: 'kind', label: 'Effect',
+        options: () => Object.entries(KINDS).map(([k, v]) => [k, v.l]),
+        apply: (m, f) => !f || (m.effect && m.effect.kind === f) },
       { id: 'cls', label: 'Class',
         options: () => CLASSES.map(c => [c, c[0].toUpperCase() + c.slice(1)]),
         apply: (m, f) => !f || classesOf(m).includes(f) },
@@ -95,14 +141,12 @@ window.DGL_CFG = (() => {
     stats(rows) {
       const cantrips = rows.filter(r => r.level === 'cantrip').length;
       const rituals = rows.filter(r => r.ritual === '1').length;
-      const innate = rows.filter(r => r.innate).length;
       const avg = (rows.reduce((a, r) => a + lvl(r.level).n, 0) / (rows.length || 1)).toFixed(1);
       return [
         { label: 'Total spells', value: fmtN(rows.length), sub: 'entries in spells.json' },
         { label: 'Cantrips', value: fmtN(cantrips), sub: '0-level known spells' },
         { label: 'Avg level', value: avg, sub: 'numeric level (cantrip = 0)' },
         { label: 'Rituals', value: fmtN(rituals), sub: 'castable as ritual' },
-        { label: 'Innate', value: fmtN(innate), sub: 'class innate magic' },
       ];
     },
 
@@ -122,7 +166,6 @@ window.DGL_CFG = (() => {
           ${badge(lvl(m.level).l, lvl(m.level).c)}
           ${badge(school(m.school).l, school(m.school).c)}
           ${m.ritual === '1' ? `<span title="Ritual casting" style="color:#fbbf24;display:inline-flex">${I.star}</span>` : ''}
-          ${m.innate ? chip('innate', '#fbbf24') : ''}
         </div>
         <div class="kv-grid">
           ${kv('Casting time', esc(m.casting_time || '—'))}
@@ -138,7 +181,10 @@ window.DGL_CFG = (() => {
           <div class="defchips">${c.map(x => chip(x, '#93c5fd')).join(' ')}</div></div>` : ''}
         ${v ? `<div class="dsection"><h4>Visual effect</h4>
           <div class="dvfx">${vfxOrb(v)}<span class="dimtxt">type ${esc(v.type)} · rgb(${vr})</span></div></div>` : ''}
-        <div class="dsection"><h4>Effect</h4>
+        <div class="dsection"><h4>Engine effect</h4>
+          <p>${badge(kindOf(m).l, kindOf(m).c)} <span class="dimtxt">${esc(effectLine(m.effect))}</span></p>
+        </div>
+        <div class="dsection"><h4>Description</h4>
           <p class="desc-text">${m.description ? keepBr(m.description) : dash}</p>
         </div>
         ${m.higher_levels ? `<div class="dsection"><h4>Higher levels</h4>
@@ -157,13 +203,14 @@ window.DGL_CFG = (() => {
       { id: 'range', label: 'Range', type: 'text', placeholder: '30 feet' },
       { id: 'duration', label: 'Duration', type: 'text', placeholder: 'Instantaneous' },
       { id: 'ritual', label: 'Ritual', type: 'toggle' },
-      { id: 'innate', label: 'Innate class magic', type: 'toggle' },
       { id: 'component_v', label: 'Verbal (V)', type: 'toggle' },
       { id: 'component_s', label: 'Somatic (S)', type: 'toggle' },
       { id: 'component_m', label: 'Material (M)', type: 'toggle' },
       { id: 'materials', label: 'Material cost', type: 'text',
         hint: 'Required when the Material component is enabled.' },
       { id: 'vfx', label: 'VFX', type: 'vfx', full: true },
+      { id: 'effect', label: 'Engine effect (JSON)', type: 'json', full: true,
+        hint: 'What the engine does: kind, target, range, radius, roll, save, on_save, dice, damage_type, condition, rounds, stat, value, handler, terrain. data/schema/spells.schema.json documents every field; tools/check_data.py validates it.' },
       { id: 'description', label: 'Description', type: 'textarea', full: true, req: false,
         hint: '<br> line breaks are supported and preserved.' },
       { id: 'higher_levels', label: 'Higher levels', type: 'textarea', full: true },
@@ -179,12 +226,13 @@ window.DGL_CFG = (() => {
       o.range = d.range;
       o.duration = d.duration;
       o.ritual = d.ritual ? '1' : '';
-      o.innate = d.innate ? 1 : 0;
+      delete o.innate; /*not a spell field (every spell comes from a book): drop it from old files*/
       o.component_v = d.component_v ? '1' : '';
       o.component_s = d.component_s ? '1' : '';
       o.component_m = d.component_m ? '1' : '';
       o.materials = d.materials;
       o.vfx = d.vfx;
+      if (d.effect !== undefined) o.effect = d.effect;
       o.description = d.description;
       o.higher_levels = d.higher_levels;
     },

@@ -25,85 +25,135 @@
 
 /*Maximum number of spells in the database (used for the known_spells bitfield).
  * Must be >= spell_database_size at runtime: the shipped dataset already
- * contains 551 spells (12 of which are innate class cantrips at indexes
- * 539-550), so 512 was NOT enough and caused out-of-bounds writes on
- * known_spells for every login/study/cast touching a spell >= 512.
- * 1024 covers the current dataset with ample room for expansion.
+ * contains 551 spells (the last 12 are the class transit cantrips), more
+ * than 512. 1024 covers the current dataset with ample room for expansion.
  * The bitfield occupies 1024/64 = 16 uint64_t = 128 bytes per character.
  * Every access to known_spells[] MUST still guard `idx < MAX_SPELL_DB_SIZE`
  * as a defensive measure (see spell_spell_slot_get/set in server_internal).*/
 #define MAX_SPELL_DB_SIZE 1024
 
-// -------------------------------------------------------
-//AoE projection types
-// -------------------------------------------------------
+/*-------------------------------------------------------
+ * The effect of a spell, read from the "effect" object of its
+ * data/spells.json record (data/schema/spells.schema.json documents every
+ * field). Nothing is deduced from the description any more: the record
+ * says what the spell does, the engine does exactly that.
+ * -------------------------------------------------------*/
+
+/*Where the effect lands.*/
 typedef enum {
-    SPELL_TARGET_SINGLE,        //Single target
-    SPELL_TARGET_SELF,          //Self-target
-    SPELL_TARGET_AOE_CIRCLE,    //Spherical explosion (fireball)
-    SPELL_TARGET_AOE_CONE,      //Cone (dragon breath, flame jet)
-    SPELL_TARGET_AOE_LINE,      // Linea (fulmine, sputo acido)
-    SPELL_TARGET_AOE_CLOUD      //Multi-round persistent cloud (poisonous gas)
+    SPELL_TARGET_SINGLE,     /*one creature within range*/
+    SPELL_TARGET_SELF,       /*the caster*/
+    SPELL_TARGET_AOE_CIRCLE, /*every creature within radius of the origin*/
+    SPELL_TARGET_AOE_CONE,   /*a 90-degree cone of length radius from the caster*/
+    SPELL_TARGET_AOE_LINE,   /*a line of length radius from the caster*/
+    SPELL_TARGET_AOE_CLOUD,  /*a circle that stays `rounds` rounds*/
+    SPELL_TARGET_COUNT
 } SpellTargetType;
 
 typedef enum {
-    SPELL_EFFECT_DAMAGE,
-    SPELL_EFFECT_HEAL,
-    SPELL_EFFECT_BUFF,
-    SPELL_EFFECT_DEBUFF
-} SpellEffectType;
+    SPELL_KIND_DAMAGE,    /*dice of damage_type, with an optional condition rider*/
+    SPELL_KIND_HEAL,      /*the caster regains dice hit points*/
+    SPELL_KIND_CONDITION, /*a condition for `rounds` rounds*/
+    SPELL_KIND_BUFF,      /*+value to stat for `rounds` rounds, on the caster*/
+    SPELL_KIND_SPECIAL,   /*a dedicated handler (spell_router.c, spell_utility.c)*/
+    SPELL_KIND_COUNT
+} SpellKind;
 
-// -------------------------------------------------------
-//Persistent gas cloud (remains on map N rounds)
-// -------------------------------------------------------
-#define MAX_CLOUDS 32
+/*How a target resists.*/
+typedef enum {
+    SPELL_ROLL_AUTO,   /*it does not: the effect lands*/
+    SPELL_ROLL_ATTACK, /*spell attack roll against its AC*/
+    SPELL_ROLL_SAVE,   /*saving throw against the spell DC*/
+    SPELL_ROLL_COUNT
+} SpellRoll;
+
+typedef enum { SPELL_BUFF_NONE, SPELL_BUFF_AC, SPELL_BUFF_ATTACK, SPELL_BUFF_DAMAGE } SpellBuffStat;
+
+typedef enum {
+    SPELL_HANDLER_NONE,
+    SPELL_HANDLER_ANIMATE_DEAD,
+    SPELL_HANDLER_BLINK,
+    SPELL_HANDLER_CHARM_PERSON,
+    SPELL_HANDLER_CLASS_TRANSIT,
+    SPELL_HANDLER_DOMINATE_MONSTER,
+    SPELL_HANDLER_INVISIBILITY,
+    SPELL_HANDLER_SUMMON_ELEMENTAL,
+    SPELL_HANDLER_TELEPORT,
+    /*The spells of exploration, protection and support (spell_utility.c).*/
+    SPELL_HANDLER_CLEANSE,      /*the caster's conditions end; dice: hit points too*/
+    SPELL_HANDLER_FIND_TRAPS,   /*traps within radius found; value 1: disarmed too*/
+    SPELL_HANDLER_IDENTIFY,     /*value unidentified items identified (0: all)*/
+    SPELL_HANDLER_LIGHT,        /*sight of at least value cells for rounds rounds*/
+    SPELL_HANDLER_MEND,         /*value points of durability to the most worn item*/
+    SPELL_HANDLER_NOURISH,      /*hunger and exhaustion gone; dice: hit points too*/
+    SPELL_HANDLER_RALLY,        /*where the party is, and the party is told*/
+    SPELL_HANDLER_REMOVE_CURSE, /*the curses of worn items and the Cursed condition*/
+    SPELL_HANDLER_SENSE,        /*creatures and items within radius, the stairs*/
+    SPELL_HANDLER_SHAPE_EARTH,  /*stone within radius opens (never in town)*/
+    SPELL_HANDLER_SHELTER,      /*a rest where no enemy is near*/
+    SPELL_HANDLER_SUMMON,       /*value allies of the floor's bestiary for rounds rounds*/
+    SPELL_HANDLER_COUNT
+} SpellHandler;
+
+/*Terrain the spell leaves at its origin, after the effect.*/
+typedef enum {
+    SPELL_TERRAIN_NONE,
+    SPELL_TERRAIN_WALL,
+    SPELL_TERRAIN_ICE,
+    SPELL_TERRAIN_MUD
+} SpellTerrain;
 
 typedef struct {
-    bool active;
-    int  cx, cy;         //Center of the cloud
-    int  radius;         //Radius in cells
-    int  floor_id;
-    int  rounds_left;    //Residual rounds before dissolving
-    int  dice_count;
-    int  dice_sides;
-    DamageType dmg_type;
-    int  save_dc;        //Saving Throw DC (Constitution)
-    char name[32];       // Es. "Nube Acida", "Gas Velenoso"
-    char owner[32];      //Username of the caster ("" = none): kills caused
-                         //by the cloud credit XP to this player, exactly
-                         //like a direct hit. In-memory only (clouds are
-                         //never persisted), so no save-format change.
-} PersistentCloud;
+    SpellKind kind;
+    SpellTargetType target;
+    int range;  /*cells (5 feet each) from the caster to the target or origin*/
+    int radius; /*cells: area radius, cone or line length*/
+    SpellRoll roll;
+    /*SPELL_ROLL_SAVE: the save that resists the whole effect. With an
+     * attack or no roll, the save that resists only the condition rider
+     * (ABILITY_NONE: the rider lands with the hit).*/
+    Ability save;
+    bool save_halves; /*damage: a successful save halves it (else none)*/
+    int dc;           /*fixed DC (martial maneuvers); 0 = 8 + proficiency + ability*/
+    int dice_count;
+    int dice_sides;
+    int dice_bonus;
+    Ability dice_add;     /*ability modifier added to the roll (ABILITY_NONE: none)*/
+    bool cantrip_scaling; /*the dice multiply at caster level 5, 11 and 17*/
+    /*Cast with a higher slot: upcast_count dice of upcast_sides +
+     * upcast_bonus added to the roll for every upcast_per slot levels above
+     * the spell's (LORE.md, The Upcast Rule). upcast_per 0: no upcast.*/
+    int upcast_count;
+    int upcast_sides;
+    int upcast_bonus;
+    int upcast_per;
+    DamageType damage_type;
+    ConditionType condition; /*MAX_CONDITIONS = none*/
+    /*Duration of the condition or buff; for a cloud, its lifetime (the
+     * condition a cloud gives lasts one round and is renewed each round).*/
+    int rounds;
+    SpellBuffStat stat;
+    int value; /*buff: the bonus; special: the parameter of the handler*/
+    SpellHandler handler;
+    SpellTerrain terrain;
+} SpellEffect;
 
-typedef struct {
-    const char*     name;
-    int             level;
-    SpellTargetType target_type;
-    SpellEffectType effect_type;
-    int             range;
-    int             radius;         /*For AoE: radius or cone/line length*/
-    int             dice_count;
-    int             dice_sides;
-    DamageType      damage_type;    /*Damage type for future resistances*/
-    int             cloud_rounds;   /*> 0 → create PersistentCloud*/
-    ActiveEffect    status_effect;
-    bool            has_status_effect;
-    int             vfx_type;
-    float           vfx_r;
-    float           vfx_g;
-    float           vfx_b;
+typedef struct SpellTemplate {
+    const char *name;
+    int level;    /*0 = cantrip*/
+    bool martial; /*school "martial": a maneuver, not a spell*/
+    SpellEffect effect;
+    int vfx_type;
+    float vfx_r;
+    float vfx_g;
+    float vfx_b;
     /*Bitmask of the classes that can learn this magic.
      * Bit N corresponds to the Nth value of ClassType (0=Barbarian … 11=Wizard).
      * 0 = no class (magic not available to players).*/
-    uint32_t        class_mask;
-    /*Innate class magic: known automatically by every character of a
-     * matching class (no book required to cast, always in the grimoire).
-     * Used for the 12 class transit cantrips.*/
-    bool            innate;
+    uint32_t class_mask;
 } SpellTemplate;
 
-extern SpellTemplate*   spell_database;
-extern int              spell_database_size;
-extern PersistentCloud  g_clouds[MAX_CLOUDS];
+extern SpellTemplate *spell_database;
+extern int spell_database_size;
 
 #endif // SPELLS_H

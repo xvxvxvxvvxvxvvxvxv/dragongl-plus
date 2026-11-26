@@ -29,21 +29,28 @@
 
 #include <stdbool.h>
 
+/*Password of the heroes of "Play Solo" (the private server is reachable
+ * from this computer only).*/
+#define SOLO_HERO_PASSWORD "dragongl-solo"
+
 typedef struct {
     char host[128];
     int port;
     char server_pass[64];
     char user[32];
-    char pass[32];
+    char pass[64];
     bool is_new;
     int race_id, subrace_id, class_id, alignment;
     char sex; /*'M' or 'F' (cosmetic)*/
     /*Keep retrying the connection for this long (ms): the solo server
      * may still be generating its world when the client first tries.*/
     int retry_ms;
-    /*Never fall back to the classic (original Dragon GL) protocol: set
-     * for the bundled solo server, which always speaks the current one.*/
-    bool no_classic;
+    /*SHA-256 fingerprint the server certificate must have (solo: the
+     * certificate of the bundled server); "" = trust on first use.*/
+    char fingerprint[112];
+    /*Play Solo: state directory of the private server; its certificate
+     * (<cert_dir>/tls/server.crt) is pinned.*/
+    char cert_dir[1100];
 } LoginInfo;
 
 bool session_start(const LoginInfo *info);
@@ -60,5 +67,7 @@ bool local_server_running(void);
 void local_server_log_tail(char *out, int cap);
 /*Directory holding the solo world (user profile).*/
 const char *local_server_dir(void);
+/*State directory of the solo server (world, saves, certificate).*/
+const char *local_server_state_dir(void);
 
 #endif

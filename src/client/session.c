@@ -24,15 +24,23 @@
 #include "platform.h"
 #include "net.h"
 #include "protocol.h"
+#include "client_proto.h"
 #include "rules.h"
+#include "binio.h"
+#include "wire.h"
+#include "client_tls.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
 #ifndef _WIN32
+#include <fcntl.h>
 #include <sys/socket.h>
 #endif
+#include <openssl/pem.h>
+#include <openssl/x509.h>
+#include "tls_common.h"
 
 static pthread_t s_thread;
 static bool s_thread_live;
@@ -52,9 +60,45 @@ static void set_status(const char *s) {
     pthread_mutex_unlock(&g_state_mutex);
 }
 
+static void set_error(const char *why) {
+    pthread_mutex_lock(&g_state_mutex);
+    copy_str(g_net_error, why, sizeof(g_net_error));
+    pthread_mutex_unlock(&g_state_mutex);
+    atomic_store(&g_net_status, NET_FAILED);
+}
+
+/*TLS handshake on the connected socket and the trust decision (see
+ * client_tls.h): the first connection to a server records its
+ * certificate fingerprint, a changed certificate is refused.*/
+static bool start_tls(int sock) {
+    char why[512] = "";
+    ClientTlsTrust trust = TLS_TRUST_KNOWN;
+    const char *fp = s_info.fingerprint[0] ? s_info.fingerprint : NULL;
+    ClientTls *t = client_tls_connect(sock, s_info.host, s_info.port, fp, 8000, &trust, why, sizeof(why));
+    if (!t) {
+        char msg[160];
+        snprintf(msg, sizeof(msg), "Secure connection failed: %s", why);
+        set_error(msg);
+        return false;
+    }
+    pthread_mutex_lock(&g_net_mutex);
+    g_tls = t;
+    pthread_mutex_unlock(&g_net_mutex);
+    if (trust == TLS_TRUST_FIRST_USE && !s_info.fingerprint[0]) {
+        char line[256];
+        snprintf(line, sizeof(line), "[SYSTEM] First connection to %s:%d. Server fingerprint %s (recorded).",
+                 s_info.host, s_info.port, client_tls_fingerprint(t));
+        client_log_add(line);
+    }
+    /*The extension protocol is negotiated in the handshake (DragonGL+
+     * servers); without it the client runs in compatibility mode.*/
+    atomic_store(&g_server_plus, client_tls_is_plus(t));
+    return true;
+}
+
 /*Connect (retrying until the deadline: the solo server may still be
- * generating its world) and send the login with the current protocol
- * version. Returns the socket, or -1 with g_net_error set.*/
+ * generating its world), start TLS and send the login. Returns the
+ * socket, or -1 with g_net_error set.*/
 static int connect_and_login(long long deadline) {
     char err[160] = "";
     int sock = -1;
@@ -62,76 +106,86 @@ static int connect_and_login(long long deadline) {
     atomic_store(&g_net_status, NET_CONNECTING);
     set_status("Connecting...");
     for (;;) {
-        sock = net_connect_timeout(s_info.host, s_info.port, 4000, err, sizeof(err));
+        sock = net_connect_to_server(s_info.host, s_info.port, 4000, err, sizeof(err));
         if (sock >= 0 || atomic_load(&s_stop) || plat_time_ms() >= deadline) break;
         set_status("Waiting for the world to be forged...");
         plat_sleep_ms(400);
     }
     if (sock < 0) {
-        pthread_mutex_lock(&g_state_mutex);
-        copy_str(g_net_error, err, sizeof(g_net_error));
-        pthread_mutex_unlock(&g_state_mutex);
-        atomic_store(&g_net_status, NET_FAILED);
+        set_error(err[0] ? err : "Could not connect to the server.");
         return -1;
     }
     g_server_sock = sock;
     atomic_store(&g_net_status, NET_LOGGING_IN);
-    set_status(client_classic() ? "Authenticating (classic server)..." : "Authenticating...");
+    set_status("Securing the connection...");
+    if (!start_tls(sock)) return -1;
+    set_status(client_classic() ? "Authenticating (Dragon GL server)..." : "Authenticating...");
 
-    MsgHeader hdr = client_hdr(MSG_LOGIN, (int)sizeof(MsgLogin));
     MsgLogin m;
     memset(&m, 0, sizeof(m));
     copy_str(m.username, s_info.user, sizeof(m.username));
     copy_str(m.password, s_info.pass, sizeof(m.password));
     copy_str(m.server_pass, s_info.server_pass, sizeof(m.server_pass));
-    m.is_new_char = s_info.is_new ? 1 : 0;
+    /*creation choices: used only if the character does not exist yet
+     * (the server rolls the ability scores)*/
     m.race_id = s_info.race_id;
     m.subrace_id = s_info.subrace_id;
     m.class_id = s_info.class_id;
     m.alignment = s_info.alignment;
-    /*Cosmetic flavour rolls (the server rolls the real ability scores)*/
-    m.age = rules_roll_dice(3, 6) + 15;
-    m.height = rules_roll_dice(4, 10) + 140;
-    m.weight = rules_roll_dice(4, 10) + 50;
-    m.social_class = rules_roll_dice(1, 100);
-    pthread_mutex_lock(&g_net_mutex);
-    bool ok = net_send(sock, &hdr, sizeof(hdr)) && net_send(sock, &m, sizeof(m));
-    pthread_mutex_unlock(&g_net_mutex);
+    BinWriter w;
+    bw_init(&w);
+    bool ok = wire_put_login(&w, &m);
+    if (ok) {
+        pthread_mutex_lock(&g_net_mutex);
+        ok = client_tls_send(g_tls, w.data, w.len);
+        pthread_mutex_unlock(&g_net_mutex);
+    }
+    if (w.data) memset(w.data, 0, w.cap); /*the frame holds the passwords*/
+    bw_free(&w);
+    memset(&m, 0, sizeof(m));
     if (!ok) {
-        pthread_mutex_lock(&g_state_mutex);
-        copy_str(g_net_error, "Could not send the login.", sizeof(g_net_error));
-        pthread_mutex_unlock(&g_state_mutex);
-        atomic_store(&g_net_status, NET_FAILED);
+        set_error("Could not send the login.");
         return -1;
     }
     copy_str(g_my_name, s_info.user, sizeof(g_my_name));
     return sock;
 }
 
+/*Play Solo: the private server writes its certificate at its first
+ * start; the client trusts exactly that certificate (no prompt, no
+ * known_servers entry). Waits for the file until the deadline.*/
+static bool pin_solo_certificate(long long deadline) {
+    char path[1200];
+    snprintf(path, sizeof(path), "%s/tls/server.crt", s_info.cert_dir);
+    for (;;) {
+        FILE *f = fopen(path, "r");
+        if (f) {
+            X509 *cert = PEM_read_X509(f, NULL, NULL, NULL);
+            fclose(f);
+            bool ok = cert && tls_cert_fingerprint(cert, s_info.fingerprint, sizeof(s_info.fingerprint));
+            X509_free(cert);
+            if (ok) return true;
+        }
+        if (atomic_load(&s_stop) || plat_time_ms() >= deadline) break;
+        set_status("Waiting for the world to be forged...");
+        plat_sleep_ms(300);
+    }
+    set_error("The private server did not start (no certificate).");
+    return false;
+}
+
 static void *session_thread(void *arg) {
     (void)arg;
     long long deadline = plat_time_ms() + (s_info.retry_ms > 0 ? s_info.retry_ms : 0);
-    g_proto_version = PROTOCOL_VERSION;
+    if (s_info.cert_dir[0] && !pin_solo_certificate(deadline)) return NULL;
     if (connect_and_login(deadline) < 0) return NULL;
     net_thread_loop(NULL);
-    /*An original Dragon GL server drops a connection whose header carries
-     * another protocol version without answering at all. Closed before
-     * the first byte arrived => try once more speaking its protocol.*/
-    if (!atomic_load(&s_stop) && !g_net_rx_any && atomic_load(&g_net_status) == NET_DISCONNECTED && !s_info.no_classic) {
-        pthread_mutex_lock(&g_net_mutex);
-        net_close(g_server_sock);
-        g_server_sock = -1;
-        pthread_mutex_unlock(&g_net_mutex);
-        g_proto_version = PROTO_CLASSIC;
-        if (connect_and_login(plat_time_ms()) < 0) return NULL;
-        net_thread_loop(NULL);
-        if (!g_net_rx_any && atomic_load(&g_net_status) == NET_DISCONNECTED) {
-            pthread_mutex_lock(&g_state_mutex);
-            copy_str(g_net_error, "The server refused the connection (incompatible version or server full).",
-                     sizeof(g_net_error));
-            pthread_mutex_unlock(&g_state_mutex);
-            atomic_store(&g_net_status, NET_FAILED);
-        }
+    if (!g_net_rx_any && atomic_load(&g_net_status) == NET_DISCONNECTED) {
+        pthread_mutex_lock(&g_state_mutex);
+        copy_str(g_net_error, "The server refused the connection (incompatible version or server full).",
+                 sizeof(g_net_error));
+        pthread_mutex_unlock(&g_state_mutex);
+        atomic_store(&g_net_status, NET_FAILED);
     }
     return NULL;
 }
@@ -160,12 +214,16 @@ void session_stop(void) {
     }
     pthread_join(s_thread, NULL);
     s_thread_live = false;
+    pthread_mutex_lock(&g_net_mutex);
+    if (g_tls) {
+        client_tls_close(g_tls);
+        g_tls = NULL;
+    }
     if (g_server_sock >= 0) {
-        pthread_mutex_lock(&g_net_mutex);
         net_close(g_server_sock);
         g_server_sock = -1;
-        pthread_mutex_unlock(&g_net_mutex);
     }
+    pthread_mutex_unlock(&g_net_mutex);
     atomic_store(&g_net_status, NET_IDLE);
 }
 
@@ -177,6 +235,12 @@ static PlatProcess s_proc;
 static char s_dir[1024];
 static char s_log[1100];
 static char s_stop_file[1100];
+
+const char *local_server_state_dir(void) {
+    static char state[1100];
+    if (!state[0]) snprintf(state, sizeof(state), "%s/world5", local_server_dir());
+    return state;
+}
 
 const char *local_server_dir(void) {
     if (!s_dir[0]) {
@@ -230,18 +294,58 @@ bool local_server_start(int port, const char *password, char *err, int err_len) 
     }
     *strrchr(data, '/') = '\0';
     const char *dir = local_server_dir();
-    char state[1100];
-    snprintf(state, sizeof(state), "%s/world", dir);
+    const char *state = local_server_state_dir();
     plat_mkdirs(state);
     snprintf(s_log, sizeof(s_log), "%s/server.log", dir);
     snprintf(s_stop_file, sizeof(s_stop_file), "%s/stop.request", dir);
+    /*A private server left over by a client that crashed still holds the
+     * world: ask it to save and quit (stop file), and wait for it.*/
+    char lock[1200];
+    snprintf(lock, sizeof(lock), "%s/server.lock", state);
+    if (plat_file_locked(lock)) {
+        FILE *sf = fopen(s_stop_file, "w");
+        if (sf) fclose(sf);
+        for (int i = 0; i < 100 && plat_file_locked(lock); i++) plat_sleep_ms(100);
+        if (plat_file_locked(lock)) {
+            remove(s_stop_file);
+            snprintf(err, (size_t)err_len, "Another solo server is still running on this world.");
+            return false;
+        }
+    }
     remove(s_stop_file);
     char port_s[16];
     snprintf(port_s, sizeof(port_s), "%d", port);
-    char pw[64];
-    snprintf(pw, sizeof(pw), "%s", password);
-    char *argv[] = {exe, "--local", "-P", port_s, "-p", pw, "-D", data, "-S", state,
-                    "--stop-file", s_stop_file, NULL};
+    /*The server reads its access password from a file only the player
+     * can read (never from the command line).*/
+    char pw_file[1100];
+    snprintf(pw_file, sizeof(pw_file), "%s/server-password", dir);
+    remove(pw_file);
+#ifndef _WIN32
+    int fd = open(pw_file, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    FILE *pf = fd >= 0 ? fdopen(fd, "w") : NULL;
+#else
+    FILE *pf = fopen(pw_file, "w");
+#endif
+    if (!pf) {
+        snprintf(err, (size_t)err_len, "Cannot write %s.", pw_file);
+        return false;
+    }
+    fprintf(pf, "%s\n", password);
+    fclose(pf);
+    char state_arg[1100];
+    snprintf(state_arg, sizeof(state_arg), "%s", state);
+    /*Heroes of DragonGL+ 2026.10 (its solo server kept them in
+     * <solo>/saves) are imported once into the new world, with the solo
+     * hero password.*/
+    char legacy[1100];
+    snprintf(legacy, sizeof(legacy), "%s/saves", dir);
+#ifdef _WIN32
+    _putenv_s("DRAGONGL_IMPORT_PASSWORD", SOLO_HERO_PASSWORD);
+#else
+    setenv("DRAGONGL_IMPORT_PASSWORD", SOLO_HERO_PASSWORD, 1);
+#endif
+    char *argv[] = {exe, "--local", "-P", port_s, "--password-file", pw_file, "-D", data,
+                    "-S", state_arg, "--stop-file", s_stop_file, "--import-legacy", legacy, NULL};
     if (!plat_spawn(&s_proc, exe, argv, dir, s_log)) {
         snprintf(err, (size_t)err_len, "Could not start the server program.");
         return false;

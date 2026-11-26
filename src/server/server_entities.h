@@ -29,20 +29,24 @@
 #include "species.h"
 #include "classes.h"
 #include "spells.h"
+#include "auth.h"
+
+/*The whole state of a running game (game.h).*/
+typedef struct Game Game;
 
 /* Size in uint64_t of the bitfield for known spells.
  * MAX_SPELL_DB_SIZE is defined in spells.h (512).
  * 512 / 64 = 8 words of 64 bits = 64 bytes. */
 #define KNOWN_SPELLS_WORDS (MAX_SPELL_DB_SIZE / 64)
 
-#define MAX_CLIENTS 64
-#define MAX_NPCS 50000
+#define MAX_CLIENTS            64
+#define MAX_NPCS               50000
 #define MAX_EFFECTS_PER_ENTITY 16
-#define MAX_BACKPACK 32
-#define MAX_BELT 4
-#define MAX_SPELL_LEVEL 9
-#define MAX_SHOP_ITEMS 50
-#define MAX_BLOCKED_PLAYERS 16
+#define MAX_BACKPACK           32
+#define MAX_BELT               4
+#define MAX_SPELL_LEVEL        9
+#define MAX_SHOP_ITEMS         50
+#define MAX_BLOCKED_PLAYERS    16
 
 /*Hunger constants, expressed in ROUNDS (1 round = TICK_MS = 0.2 s real,
  * see server_internal.h). HUNGER_MAX 2000 = 400 s: a character that
@@ -50,9 +54,9 @@
  * (1440 rounds) takes 4.8 real minutes. When re-balancing food, keep
  * the round scale in mind (HUNGER_ALERT/WEAK/FAINT below are on the
  * same scale).*/
-#define HUNGER_MAX 2000
+#define HUNGER_MAX   2000
 #define HUNGER_ALERT 1200
-#define HUNGER_WEAK 1600
+#define HUNGER_WEAK  1600
 #define HUNGER_FAINT 1850
 
 typedef enum {
@@ -86,55 +90,61 @@ typedef enum {
     SPEC_COUNT
 } MerchantSpecialization;
 
+/*Rounds between two restocks of a shop: 10 real-time minutes at 5 rounds a
+ * second (LORE.md, "Merchant Restocking").*/
+#define MERCHANT_RESTOCK_ROUNDS 3000
+
 typedef struct {
     int item_templates[MAX_SHOP_ITEMS];
     int item_stock[MAX_SHOP_ITEMS];
     int item_stock_max[MAX_SHOP_ITEMS];
     int item_count;
-    int restock_timer;
+    int restock_timer; /*rounds to the next restock*/
     char shop_name[64];
     MerchantSpecialization spec;
 } MerchantData;
 
 // AI Node status
+typedef enum { AI_SUCCESS, AI_FAILURE, AI_RUNNING } AINodeStatus;
+
+/*Behavior tree of an NPC, chosen from its archetype (ai_attach_behavior).
+ * An enum, not a function pointer: it can be persisted as is, and ISO C
+ * does not allow storing a function pointer in a void *.*/
 typedef enum {
-    AI_SUCCESS,
-    AI_FAILURE,
-    AI_RUNNING
-} AINodeStatus;
+    AI_BEHAVIOR_DEFAULT = 0,
+    AI_BEHAVIOR_VOID_CRAWLER,
+    AI_BEHAVIOR_MAGE,
+    AI_BEHAVIOR_SWARM,
+    /*Fights for a character: current_target_id is the entity id of that
+     * character, state_timer the rounds it has left (ai_make_ally).*/
+    AI_BEHAVIOR_ALLY
+} AiBehavior;
 
 // Context for NPC Artificial Intelligence
 typedef struct {
     int current_target_id;
     int state_timer;
     int legendary_actions_spent;
-    void* behavior_tree_root; // Points to an AINodeFunc
+    AiBehavior behavior;
 } AIContext;
 
+#define NPC_LOOT_MAX 30 /*items of the remains of a character*/
+
+/*A monster, a merchant, the remains of a character or an item on the
+ * ground. The shop of a merchant and the items of the remains or of an
+ * item on the ground are not in the record: they are entries of the
+ * tables of npc_store.h, named by shop_id and loot_id (0 = none). The
+ * record stays under 1 KB (it was 5.2 KB with them inside).*/
 typedef struct {
     int entity_id, x, y, floor_id, hp, max_hp;
     bool active;
     EntityArchetype archetype;
     int template_idx; //Index in bestiary_data (if applicable)
     const MonsterTemplate *template;
-    
+
     // Dynamic Stats
     int ac, attack_bonus, damage_dice, damage_sides, xp_reward, gold_drop, morale;
-    
-    // Systems
-    ActiveEffect effects[MAX_EFFECTS_PER_ENTITY];
-    int effect_count;
-    int spell_slots[MAX_SPELL_LEVEL + 1];
-    int spell_slots_max[MAX_SPELL_LEVEL + 1];
-    AIContext ai_ctx;
-    
-    MerchantData merchant;
-    
-    // Bones / Ghost system
-    bool is_ghost;
-    char custom_name[64];
-    ItemInstance ghost_loot[30];
-    
+
     //Respawn
     int spawn_x, spawn_y, respawn_timer;
 
@@ -143,43 +153,72 @@ typedef struct {
     //Each tick receives energy equal to (template->speed or 2 if not defined).
     //speed=1: slow (acts every 2 ticks), speed=2: normal, speed=3: fast (acts 2x per tick)
     int energy;
+
+    // Bones / Ghost system
+    bool is_ghost;
+
+    // Systems
+    AIContext ai_ctx;
+    int effect_count;
+    ActiveEffect effects[MAX_EFFECTS_PER_ENTITY];
+    int spell_slots[MAX_SPELL_LEVEL + 1];
+    int spell_slots_max[MAX_SPELL_LEVEL + 1];
+
+    char custom_name[64];
+    int shop_id; /*ARCH_MERCHANT: its entry of NpcPools.shops (npc_shop)*/
+    int loot_id; /*remains and items on the ground: NpcPools.bags (npc_loot)*/
 } EntityInstance;
+
+_Static_assert(sizeof(EntityInstance) <= 1024, "the NPC record must stay under 1 KB");
 
 typedef EntityInstance NPC; // Temporary alias for backward compatibility
 
 typedef struct {
     int sock, entity_id, x, y, floor_id;
     bool active, authenticated, is_dm;
-    char username[32], password[32];
+    char username[32];
+    char password_hash[AUTH_HASH_LEN]; /*Argon2id string, see auth.h*/
+    /*A login handed to the login worker (login_worker.h): the slot waits,
+     * reads nothing more from its socket, and holds login_user against a
+     * second session for the same character until login_finish().*/
+    bool login_pending;
+    uint64_t login_gen;
+    char login_user[32];
     RaceType race_id;
     SubraceType subrace_id;
     ClassType class_id;
     int level, xp, str, dex, con, intel, wis, cha;
-    uint64_t gold; int hp, max_hp;
-    ItemInstance backpack[MAX_BACKPACK]; int backpack_count;
-    ItemInstance belt[MAX_BELT]; 
-    ItemInstance slot_head, slot_neck, slot_body, slot_back, slot_hand_r, slot_hand_l, slot_hands, slot_arm_r, slot_arm_l, slot_feet;
+    uint64_t gold;
+    int hp, max_hp;
+    ItemInstance backpack[MAX_BACKPACK];
+    int backpack_count;
+    ItemInstance belt[MAX_BELT];
+    ItemInstance slot_head, slot_neck, slot_body, slot_back, slot_hand_r, slot_hand_l, slot_hands,
+        slot_arm_r, slot_arm_l, slot_feet;
     ItemInstance slot_rings[10];
     int light_turns_left, hunger_level, exhaustion_level;
     int spell_slots[MAX_SPELL_LEVEL + 1], spell_slots_max[MAX_SPELL_LEVEL + 1];
+    int cast_upcast; /*while 'cast' runs: slot levels above the spell's (not saved)*/
     ActiveEffect effects[MAX_EFFECTS_PER_ENTITY];
     int effect_count;
     // Bargaining system
-    int pending_trade_item_idx;      //Item index (store or backpack)
-    uint64_t pending_trade_price;    //Negotiated price
-    int pending_trade_merchant_id;   //ID of the merchant you trade with (-1 if none)
-    bool pending_trade_is_buy;       // true = purchase, false = sale
-    int pending_trade_attempts;      //Number of consecutive attempts
-    int alignment;                   // 0-8: Lawful Good -> Chaotic Evil
-    
+    int pending_trade_item_idx;     //Item index (store or backpack)
+    int pending_trade_template_idx; //The item haggled for: the deal is void if the slot holds another
+    uint64_t pending_trade_price;   //Negotiated price
+    int pending_trade_merchant_id; //ID of the merchant you trade with (-1 if none)
+    bool pending_trade_is_buy;     // true = purchase, false = sale
+    int pending_trade_attempts;    //Number of consecutive attempts
+    int alignment;                 // 0-8: Lawful Good -> Chaotic Evil
+
     /* --- MMO System --- */
-    char party_leader[32];           // Empty string means not in a party. Otherwise holds the party leader's username.
-    char pending_invite[32];         //Username of the person who invited you to the party.
-    char trading_with[32];           //Username of the player you are trading with
-    bool trade_accepted;             //true if he accepted the trade
-    int trade_offer_item_idx;        //Backpack index of the offered item (-1 = none)
-    uint64_t trade_offer_gold;       //Gold offered
-    ItemInstance trade_offer_item;   //Copy of the offered item, checked again when the trade runs
+    char party_leader
+        [32]; // Empty string means not in a party. Otherwise holds the party leader's username.
+    char pending_invite[32];       //Username of the person who invited you to the party.
+    char trading_with[32];         //Username of the player you are trading with
+    bool trade_accepted;           //true if he accepted the trade
+    int trade_offer_item_idx;      //Backpack index of the offered item (-1 = none)
+    ItemInstance trade_offer_item; //Byte copy of that item when it was offered
+    uint64_t trade_offer_gold;     //Gold offered
 
     /*--- Messaging: block list and anti-spam ---*/
     char blocked_players[MAX_BLOCKED_PLAYERS][32]; //Username of blocked players
@@ -187,20 +226,15 @@ typedef struct {
     long long last_msg_ms;                         //Timestamp of the last msg/say (anti-spam)
 
     /* --- Phase 3: Persistent statistics --- */
-    int total_kills;                 //Total number of NPCs eliminated
-    int total_steps;                 //Total number of steps taken
+    int total_kills; //Total number of NPCs eliminated
+    int total_steps; //Total number of steps taken
     /* --- Innate transit magic: deepest floor ever reached by this character.
      * Used by the 12 class transit cantrips (surface <-> deepest explored). */
     int max_floor_explored;
     /* --- Phase 4: Advanced Speed/Tick System --- */
-    long long last_action_ms;        //Timestamp (ms) for throttling (anti-spam)
-    /*Text-command rate limit (GCRA token bucket, DragonGL+): the
-     * graphical client issues commands from buttons (equip, buy, cast...)
-     * often right after a step; sharing last_action_ms with MSG_MOVE
-     * silently DROPPED those clicks. Commands now have their own bucket:
-     * bursts of up to CMD_BURST, then one every CMD_INTERVAL_MS.*/
-    long long cmd_tat_ms;
-    long long next_attack_ms;        /*melee: one attack per round (see player_attack_interval_ms)*/
+    long long last_action_ms; /*Last accepted step (ms): at most one per 200 ms*/
+    long long cmd_window_ms;  /*Start of the current second of text commands*/
+    int cmd_in_window;        /*Text commands accepted in it*/
     /*--- Phase 5: Grimoire - spells learned ---
 * Compact bitfield: bit N = 1 → magic index N in spell_database known.
      * Test: (known_spells[N/64] >> (N%64)) & 1
@@ -208,97 +242,88 @@ typedef struct {
      * Clear: known_spells[N/64] &= ~(1ULL << (N%64))*/
     uint64_t known_spells[KNOWN_SPELLS_WORDS];
     /*--- Stage 6: Boss Flags ---*/
-    uint32_t bosses_defeated;        // Bitmask for defeated bosses
-    bool needs_study;                // Indicator for level up study HUD
-    int unspent_stat_points;         // Stat points to distribute
+    uint32_t bosses_defeated; // Bitmask for defeated bosses
+    bool needs_study;         // Indicator for level up study HUD
+    int unspent_stat_points;  // Stat points to distribute
+    /*--- The end of the game (server_conquest.c) ---*/
+    int64_t conquered_at; /*when the dungeon was conquered (time_t), 0: not yet*/
+    bool saves_sealed;    /*conquered and saved once: nothing more is saved*/
+    /*--- Leaving in a fight (server_combat.h, client_in_combat) ---*/
+    long long last_combat_ms;  /*last blow given or wound taken (get_time_ms)*/
+    long long linger_until_ms; /*disconnected in a fight: stays in the world until then*/
+    int event_serial;          /*the last invasion he fought in (WorldEvent.serial), 0: none*/
 } Client;
-
 
 /*One ActiveEffect flattened to plain data for the save file: the
  * in-memory ActiveEffect.name is a POINTER (into the saving process's
  * memory) and must never reach the disk. cond is the canonical
  * ConditionType (see condition_to_name/_from_name in rules.c); a name
- * that is not a known condition (spell bookkeeping effects like
- * "Nube Acida" or "Confused") saves as MAX_CONDITIONS and is dropped
+ * that is not a known condition (spell buffs and handler effects like
+ * "Bless" or "Dominated") saves as MAX_CONDITIONS and is dropped
  * on load — only canonical conditions drive real mechanics (HP ticks,
  * saves, action locks), so losing the cosmetic ones across a logout is
  * safe (they are 3-5 round transients anyway).*/
 typedef struct {
-    int cond;            /*ConditionType; MAX_CONDITIONS = not a condition */
-    int trigger;         /*RuleEventType */
-    int mod_type;        /*ModifierType */
+    int cond;     /*ConditionType; MAX_CONDITIONS = not a condition */
+    int trigger;  /*RuleEventType */
+    int mod_type; /*ModifierType */
     int value;
     int duration_rounds;
-    int is_persistent;   /*0/1 (bool) */
+    int is_persistent; /*0/1 (bool) */
 } SavedEffect;
 
-/*Save-file header (M1): the old format was a bare SaveData fwrite —
- * the ONLY load-side defense was "fread != sizeof -> refuse", so a
- * same-size layout change was silently misinterpreted. Now every
- * .save starts with magic + version + a CRC-32 (IEEE) of the SaveData
- * payload: wrong generation => magic/version mismatch, bit rot or
- * tampering => CRC mismatch; the file is kept intact and the login is
- * refused with a clear reason.*/
-#define SAVE_MAGIC   0x44474C53u /* 'D''G''L''S' */
-/*v1: header + PBKDF2-SHA256 password (64 hex) + SavedEffect (POD).*/
-#define SAVE_VERSION 1
-
+/*In-memory image of a character save. It is NEVER written as a raw
+ * struct: persist_write_player() serializes it field by field.*/
 typedef struct {
-    uint32_t magic;    /*SAVE_MAGIC */
-    uint32_t version;  /*SAVE_VERSION */
-    uint32_t crc32;    /*CRC-32 (IEEE) of the SaveData payload */
-    uint32_t reserved; /*0, for future expansion */
-} SaveHeader;
-
-typedef struct {
-    char password[80]; /*PBKDF2-SHA256 hex (64 chars) + NUL + margin */
+    char password_hash[AUTH_HASH_LEN]; /*Argon2id string, NUL-terminated */
     int x, y, floor_id;
     RaceType race_id;
     SubraceType subrace_id;
     ClassType class_id;
     int level, xp, str, dex, con, intel, wis, cha;
-    uint64_t gold; int hp, max_hp;
-    ItemInstance backpack[MAX_BACKPACK]; int backpack_count;
+    uint64_t gold;
+    int hp, max_hp;
+    ItemInstance backpack[MAX_BACKPACK];
+    int backpack_count;
     ItemInstance belt[MAX_BELT];
-    ItemInstance s_head, s_neck, s_body, s_back, s_hand_r, s_hand_l, s_hands, s_arm_r, s_arm_l, s_feet, s_rings[10];
+    ItemInstance s_head, s_neck, s_body, s_back, s_hand_r, s_hand_l, s_hands, s_arm_r, s_arm_l,
+        s_feet, s_rings[10];
     int spell_slots[MAX_SPELL_LEVEL + 1], spell_slots_max[MAX_SPELL_LEVEL + 1];
     int alignment;
     /*--- Step 3: Fields Added for Save State Complete ---*/
-    SavedEffect effects[MAX_EFFECTS_PER_ENTITY];  /*Active status effects (POD, no pointers)*/
-    int effect_count;                             /*Number of saved effects*/
-    int light_turns_left;                         /*Torch/Magic light remaining*/
-    int hunger_level;                             /*Current hunger level*/
-    int exhaustion_level;                         /*Exhaustion level*/
-    int total_kills;                              /* Stats: total kills        */
-    int total_steps;                              /* Stats: total steps        */
-    int max_floor_explored;                       /*Deepest plane reached (innate transit)*/
+    SavedEffect effects[MAX_EFFECTS_PER_ENTITY]; /*Active status effects (POD, no pointers)*/
+    int effect_count;                            /*Number of saved effects*/
+    int light_turns_left;                        /*Torch/Magic light remaining*/
+    int hunger_level;                            /*Current hunger level*/
+    int exhaustion_level;                        /*Exhaustion level*/
+    int total_kills;                             /* Stats: total kills        */
+    int total_steps;                             /* Stats: total steps        */
+    int max_floor_explored;                      /*Deepest plane reached (transit cantrips)*/
     /* --- Phase 5: Persistent grimoire --- */
-    uint64_t known_spells[KNOWN_SPELLS_WORDS];    /* Bitfield of known spells  */
+    uint64_t known_spells[KNOWN_SPELLS_WORDS]; /* Bitfield of known spells  */
     /*--- Stage 6: Boss Flags ---*/
-    uint32_t bosses_defeated;                     /* Bitmask for defeated bosses */
+    uint32_t bosses_defeated; /* Bitmask for defeated bosses */
     int unspent_stat_points;
     /*--- Messaging: Persistent block list ---*/
     char blocked_players[MAX_BLOCKED_PLAYERS][32]; /* Blocked players */
     int blocked_count;                             /*Number of entries in the list*/
+    int64_t conquered_at; /*the end of the game: when (time_t), 0: not yet*/
 } SaveData;
-
-
-void perform_attack_npc(NPC *n, Client *c, NPC *all_npcs);
-void send_text_to_client(int sock, const char* fmt, ...);
 
 /*--- known_spells bitfield helpers (defensive) ---
  * Every access MUST go through these: they clamp the index to
  * MAX_SPELL_DB_SIZE, so a spell database larger than the bitfield
- * can never read/write out of bounds (the old `si / 64` open coding
- * wrote past known_spells[8] when the dataset passed 512 spells).*/
+ * can never read/write out of bounds.*/
 static inline bool spell_known_get(const Client *c, int idx) {
-    if (idx < 0 || idx >= MAX_SPELL_DB_SIZE)
+    if (idx < 0 || idx >= MAX_SPELL_DB_SIZE) {
         return false;
+    }
     return ((c->known_spells[idx / 64] >> (idx % 64)) & 1ULL) != 0;
 }
 static inline void spell_known_set(Client *c, int idx) {
-    if (idx < 0 || idx >= MAX_SPELL_DB_SIZE)
+    if (idx < 0 || idx >= MAX_SPELL_DB_SIZE) {
         return;
+    }
     c->known_spells[idx / 64] |= 1ULL << (idx % 64);
 }
 

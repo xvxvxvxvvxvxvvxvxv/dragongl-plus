@@ -1,0 +1,619 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nicolataibi/dragongl/data/schema/spells.schema.json",
+  "title": "Dragon GL spells (data/spells.json)",
+  "description": "Spell templates, loaded by src/shared/data_loader.c. A spell is learned and cast from a book of items.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "spells"
+  ],
+  "properties": {
+    "spells": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "image",
+          "description",
+          "higher_levels",
+          "level",
+          "school",
+          "classes",
+          "duration",
+          "ritual",
+          "casting_time",
+          "range",
+          "component_v",
+          "component_s",
+          "component_m",
+          "materials",
+          "vfx",
+          "effect"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63
+          },
+          "image": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "higher_levels": {
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              "cantrip",
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "8",
+              "9"
+            ]
+          },
+          "school": {
+            "enum": [
+              "abjuration",
+              "conjuration",
+              "divination",
+              "enchantment",
+              "evocation",
+              "illusion",
+              "martial",
+              "necromancy",
+              "transmutation"
+            ]
+          },
+          "classes": {
+            "type": "string",
+            "pattern": "^(barbarian|bard|cleric|druid|fighter|monk|paladin|ranger|rogue|sorcerer|warlock|wizard)(,(barbarian|bard|cleric|druid|fighter|monk|paladin|ranger|rogue|sorcerer|warlock|wizard))*$"
+          },
+          "duration": {
+            "type": "string",
+            "minLength": 1
+          },
+          "ritual": {
+            "enum": [
+              "",
+              "1"
+            ],
+            "description": "\"1\" yes, \"\" no"
+          },
+          "casting_time": {
+            "type": "string",
+            "minLength": 1
+          },
+          "range": {
+            "type": "string",
+            "minLength": 1
+          },
+          "component_v": {
+            "enum": [
+              "",
+              "1"
+            ],
+            "description": "\"1\" yes, \"\" no"
+          },
+          "component_s": {
+            "enum": [
+              "",
+              "1"
+            ],
+            "description": "\"1\" yes, \"\" no"
+          },
+          "component_m": {
+            "enum": [
+              "",
+              "1"
+            ],
+            "description": "\"1\" yes, \"\" no"
+          },
+          "materials": {
+            "type": "string"
+          },
+          "vfx": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "r",
+              "g",
+              "b"
+            ],
+            "properties": {
+              "type": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4,
+                "description": "particle effect (spawn_vfx, client_particles.c): 0 burst, 1 explosion, 2 aura, 3 ray, 4 storm"
+              },
+              "r": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "g": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "b": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          },
+          "effect": {
+            "type": "object",
+            "description": "What the spell does in the engine (src/shared/spell_effect.c parses it, src/server/spell_cast.c applies it). Ranges and radii are in cells of 5 feet.",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "target",
+              "range"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "damage",
+                  "heal",
+                  "condition",
+                  "buff",
+                  "special"
+                ],
+                "description": "damage: dice of damage_type (optional condition rider); heal: the caster regains dice HP; condition: a condition for rounds; buff: +value to stat for rounds on the caster; special: a handler (src/server/spell_router.c, src/server/spell_utility.c)"
+              },
+              "target": {
+                "enum": [
+                  "single",
+                  "self",
+                  "circle",
+                  "cone",
+                  "line",
+                  "cloud"
+                ],
+                "description": "single: the nearest enemy within range; self: the caster; circle/cloud: centred on the nearest enemy within range, or on the caster when range is 0; cone/line: from the caster towards the nearest enemy within radius; a cloud stays rounds rounds"
+              },
+              "range": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 60,
+                "description": "cells; 0 = the caster"
+              },
+              "radius": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30,
+                "description": "cells: circle or cloud radius, cone or line length"
+              },
+              "roll": {
+                "enum": [
+                  "auto",
+                  "attack",
+                  "save"
+                ],
+                "description": "how a target resists: not at all, spell attack against its AC, saving throw against the spell DC"
+              },
+              "save": {
+                "enum": [
+                  "str",
+                  "dex",
+                  "con",
+                  "int",
+                  "wis",
+                  "cha"
+                ],
+                "description": "with roll save: the save that resists the effect; with attack or auto: the save that resists only the condition rider"
+              },
+              "on_save": {
+                "enum": [
+                  "half",
+                  "none"
+                ],
+                "description": "damage with roll save: what a successful save leaves"
+              },
+              "dc": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 30,
+                "description": "fixed DC (martial maneuvers); otherwise 8 + proficiency + casting ability modifier"
+              },
+              "dice": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "count",
+                  "sides"
+                ],
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "sides": {
+                    "enum": [
+                      0,
+                      1,
+                      4,
+                      6,
+                      8,
+                      10,
+                      12,
+                      20
+                    ]
+                  },
+                  "bonus": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 999
+                  },
+                  "add": {
+                    "enum": [
+                      "str",
+                      "dex",
+                      "con",
+                      "int",
+                      "wis",
+                      "cha",
+                      "spell"
+                    ],
+                    "description": "ability modifier added to the roll; spell = the casting ability"
+                  }
+                }
+              },
+              "upcast": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "cast with a higher slot (LORE.md, The Upcast Rule): count dice of sides + bonus added to the roll for every per slot levels above the spell's level",
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 20
+                  },
+                  "sides": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 20
+                  },
+                  "bonus": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "per": {
+                    "enum": [
+                      1,
+                      2
+                    ],
+                    "description": "slot levels for one step (default 1)"
+                  }
+                }
+              },
+              "damage_type": {
+                "enum": [
+                  "acid",
+                  "bludgeoning",
+                  "cold",
+                  "fire",
+                  "force",
+                  "lightning",
+                  "necrotic",
+                  "piercing",
+                  "poison",
+                  "psychic",
+                  "radiant",
+                  "slashing",
+                  "thunder"
+                ]
+              },
+              "cantrip_scaling": {
+                "const": true,
+                "description": "the dice double at character level 5, triple at 11, quadruple at 17"
+              },
+              "condition": {
+                "enum": [
+                  "blinded",
+                  "charmed",
+                  "deafened",
+                  "frightened",
+                  "grappled",
+                  "incapacitated",
+                  "invisible",
+                  "paralyzed",
+                  "petrified",
+                  "poisoned",
+                  "prone",
+                  "restrained",
+                  "stunned",
+                  "unconscious",
+                  "burning",
+                  "bleeding",
+                  "cursed",
+                  "frozen",
+                  "silenced"
+                ],
+                "description": "the condition of the effect (kind condition) or its rider (kind damage); the names of src/shared/rules.c"
+              },
+              "rounds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "description": "duration of the condition or buff; for a cloud its lifetime (the condition it gives lasts one round, renewed each round)"
+              },
+              "stat": {
+                "enum": [
+                  "ac",
+                  "attack",
+                  "damage"
+                ]
+              },
+              "value": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10,
+                "description": "buff: the bonus (at least 1); special: the parameter of the handler"
+              },
+              "handler": {
+                "enum": [
+                  "animate_dead",
+                  "blink",
+                  "charm_person",
+                  "class_transit",
+                  "cleanse",
+                  "dominate_monster",
+                  "find_traps",
+                  "identify",
+                  "invisibility",
+                  "light",
+                  "mend",
+                  "nourish",
+                  "rally",
+                  "remove_curse",
+                  "sense",
+                  "shape_earth",
+                  "shelter",
+                  "summon",
+                  "summon_elemental",
+                  "teleport"
+                ],
+                "description": "animate_dead, blink, charm_person, class_transit (town and the deepest floor), dominate_monster, invisibility, summon_elemental, teleport; cleanse: the caster's conditions end (dice: HP too); find_traps: traps within radius found (value 1: disarmed); identify: value items identified (none: all); light: sight of value cells for rounds; mend: value tenths of durability to the most worn item; nourish: hunger and a level of exhaustion gone (dice: HP too); rally: where the party is; remove_curse: worn items and the Cursed condition; sense: creatures and items within radius, the stairs; shape_earth: wall and rock within radius open (not in town); shelter: a rest with no enemy within 10 cells; summon: value allies of the floor's bestiary for rounds"
+              },
+              "terrain": {
+                "enum": [
+                  "wall",
+                  "ice",
+                  "mud"
+                ],
+                "description": "terrain left around the origin after the effect"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "damage"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "roll",
+                    "dice",
+                    "damage_type"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "heal"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "dice"
+                  ],
+                  "properties": {
+                    "target": {
+                      "const": "self"
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "condition"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "roll",
+                    "condition",
+                    "rounds"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "buff"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "stat",
+                    "value",
+                    "rounds"
+                  ],
+                  "properties": {
+                    "target": {
+                      "const": "self"
+                    },
+                    "value": {
+                      "minimum": 1
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "special"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "handler"
+                  ]
+                },
+                "else": {
+                  "not": {
+                    "required": [
+                      "handler"
+                    ]
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "roll": {
+                      "const": "save"
+                    }
+                  },
+                  "required": [
+                    "roll"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "save"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "damage"
+                    },
+                    "roll": {
+                      "const": "save"
+                    }
+                  },
+                  "required": [
+                    "roll"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "on_save"
+                  ]
+                },
+                "else": {
+                  "not": {
+                    "required": [
+                      "on_save"
+                    ]
+                  }
+                }
+              },
+              {
+                "if": {
+                  "required": [
+                    "condition"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "rounds"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "target": {
+                      "const": "cloud"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "rounds"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "target": {
+                      "enum": [
+                        "circle",
+                        "cone",
+                        "line",
+                        "cloud"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "radius"
+                  ]
+                },
+                "else": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "kind": {
+                          "const": "special"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    {
+                      "not": {
+                        "required": [
+                          "radius"
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

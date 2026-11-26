@@ -1,0 +1,314 @@
+# Dragon GL — Developer Guide
+
+This document describes the internal architecture, threading model, subsystems, and developer workflows for Dragon GL.
+
+---
+
+## 1. Project Architecture
+
+Dragon GL is designed with a clear separation between the server engine, the Vulkan client, and shared game mechanics.
+
+```
+dragongl-dev/
+├── include/           # Public headers (protocol, data structures, rules, voxels)
+├── src/
+│   ├── client/        # Vulkan renderer, input handling, HUD, VFX, network thread
+│   ├── server/        # Event loop, game tick, movement, command table + handlers, AI, persistence
+│   └── shared/        # d20 rules, dataset loaders, map primitives
+├── shaders/           # GLSL vertex, fragment, and GPD compute shaders
+├── data/              # Read-only JSON datasets (bestiary.json, items.json, spells.json)
+├── tests/             # Standalone C & Python unit test suite
+├── tools/             # Balance analysis (Python) and Web Data Studio (HTML/JS)
+├── third_party/       # cJSON (MIT), the JSON parser; a distribution links its own (DRAGONGL_SYSTEM_CJSON)
+└── readme_assets/     # Screenshots, portraits, and graphical assets
+```
+
+### Core Executables & Targets:
+- **`dragongl_server`**: Authoritative game server simulating 100 floors, NPC AI, physics, traps, and combat.
+- **`dragongl_client`**: 3D client, Vulkan 1.3 GPU-driven dynamic rendering (GLFW window).
+- **`dragongl_shaders`**: Custom target invoking `glslc` to produce SPIR-V binaries (`build/shaders/*.spv`).
+
+---
+
+## 2. Rendering: Vulkan 1.3, GPU-Driven
+
+The client has a single renderer (`src/client/render_vk.c` and the `vk_*.c` modules, table below): Vulkan 1.3 with dynamic rendering and synchronization2, the only device features it enables.
+
+1. **Instance upload:** the CPU writes compact instance descriptors (`GpdInstance`, `GpdOriented`: position, scale, colour, orientation) into persistently mapped storage buffers, one set per frame slot. Map tiles are rebuilt only for a window around the player and only when the map changed.
+2. **GPU culling and expansion:** compute shaders (`gpd_cull_map.comp`, `gpd_cull_dyn.comp`, `gpd_expand_*.comp`) drop what lies beyond the vision radius and generate the triangles into a device-local vertex buffer.
+3. **Indirect draw:** `gpd_final.comp` writes the `VkDrawIndirectCommand`; the scene is one `vkCmdDrawIndirect`, the HUD a second draw from a host vertex buffer.
+
+**Frame loop** (`vk_draw_frame`, `vk_frame.c`): wait for the fence of the slot (three frames in flight), acquire an image, reset the fence, record, submit, present. The image-available semaphore and the fence belong to the frame slot; the render-finished semaphore belongs to the swapchain image. A resize (GLFW callback), `VK_ERROR_OUT_OF_DATE_KHR` or `VK_SUBOPTIMAL_KHR` rebuilds the swapchain (with `oldSwapchain`) before the next frame; a minimized window is waited out. Viewport and scissor are dynamic state, so pipelines survive a resize.
+
+**Device selection:** every GPU is listed at start-up with the reason it is unusable, if any (no Vulkan 1.3, no swapchain, no graphics+compute queue that can present to the window). Discrete GPUs win over integrated, virtual and software ones, then the larger device-local memory. `DRAGONGL_GPU=<index|name>` overrides the choice.
+
+**Shaders** are read from `$DRAGONGL_SHADER_DIR`, then `shaders/` next to the executable (`build/shaders`), then `/usr/share/dragongl/shaders`.
+
+**Validation:** `VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation` enables the Khronos layer. `tests/client/test_client.py` runs the real client against a real server under Xvfb with Mesa lavapipe and the validation layer: it fails on any validation message, checks that frames are drawn, resizes the window and quits with Escape (`./build.sh -k`, and in CI).
+
+**Lost device:** `VK_ERROR_DEVICE_LOST` or `VK_ERROR_SURFACE_LOST_KHR` from acquire, submit or present sets `device_lost`; the main loop then destroys the whole renderer and builds it again on the same window (`restart_renderer`, at most three times in a session), and the scene is uploaded again from the game state, which is untouched. `DRAGONGL_TEST_DEVICE_LOST=<frame>` reports a loss at that frame: `tests/client` uses it, since a real driver cannot be made to lose its device on demand.
+
+**Frame time:** the interval between frames goes into a histogram (`include/histogram.h`, the one the server uses for its rounds); the client prints the count, p50, p99 and maximum at exit, F3 shows the current value, and `--frames N` draws N frames and exits. Measure on the GPU of the players: on lavapipe (CI) the number says only that nothing stalls.
+
+**Client modules** (`src/client/`; no function over 120 lines, no file over 1,000):
+
+| Module | Role |
+| :--- | :--- |
+| `main_client.c`, `client_login.c` | command line, connection and login, the character prompts |
+| `net_thread.c`, `client_tls.c`, `known_servers.c` | the connection: TLS, pinned fingerprints, messages of the server into the client state |
+| `cli_thread.c` | commands typed in the terminal |
+| `client_config.c` | `client.conf`: settings, keys of the actions, keys bound to commands; `--print-config` |
+| `client_input.c` | GLFW callbacks: actions, camera, the command line of the window, HUD scale |
+| `line_edit.c`, `client_log.c` | the edited line with its history; the last 256 messages and word wrapping |
+| `hud_theme.c`, `hud_draw.c` | colours and their contrast; quads and the 5x7 font, snapped to device pixels, sRGB to linear when the swapchain is sRGB |
+| `hud.c`, `hud_world.c` | the panels; the labels placed in the scene (compass, names, combat numbers) |
+| `render_vk.c` | window, main loop, swapchain rebuild, restart after a lost device, frame times |
+| `vk_init.c`, `vk_device.c`, `vk_swapchain.c`, `vk_pipeline.c`, `vk_gpd.c` | instance and device, swapchain, HUD pipeline, compute and scene pipelines with their buffers (`vk_internal.h`) |
+| `vk_scene.c`, `vk_frame.c` | instances of tiles, entities and particles; one frame: acquire, record, submit, present |
+| `client_math.c`, `client_minimap.c`, `client_particles.c`, `client_fct.c`, `client_tome.c` | matrices, minimap, particles, combat numbers, the animated tomes |
+
+`line_edit`, `client_config`, `client_log` and `hud_theme` use neither GLFW nor Vulkan and are unit-tested (`tests/test_client_ui.c`); key codes in `client_config.h` are GLFW's by value, checked by `_Static_assert` in `client_input.c`.
+
+### Visual FX & HUD
+- **HUD:** one vertex buffer of coloured quads in virtual pixels: `hud_begin` takes the framebuffer size and the scale (`ui_scale_auto`: the monitor content scale and the window height, steps of 0.25 from 0.5 to 4), every quad is snapped to device pixels. Text is always on a panel or on its own plate; `test_contrast` holds every colour of `hud_theme.c` to 4.5:1 against the panel over black and over white, composited in linear light as the GPU blends it.
+- **Floating Combat Text (FCT):** 3D world coordinates of damage/healing values are projected onto the 2D HUD viewport using the camera's Model-View-Projection (MVP) matrix.
+- **Particle System:** `MSG_SPELL_VFX` packets spawn framerate-independent, delta-time animated particles with school-dependent color coding.
+
+---
+
+## 3. Server Architecture: D3ES & Spatial Partitioning
+
+### Data-Driven Decoupled Entity System (D3ES)
+The server abandons monolithic structures in favor of lightweight composition:
+- **`EntityTemplates`**: Immutable blueprints loaded from JSON datasets (`data/bestiary.json`, `data/items.json`).
+- **`EntityInstance`**: Ephemeral, runtime state containing current HP, position `(x, y)`, level, and active status conditions.
+- **Type-Safe Archetypes**: Categorized by `EntityArchetype` enums (`ARCH_SWARM`, `ARCH_BOSS`, `ARCH_MERCHANT`, `ARCH_CASTER`), replacing slow string comparisons with fast jump tables.
+
+### Spatial Partitioning ($O(1)$)
+Every floor maintains an `entity_grid` occupancy map. Looking up an entity at coordinates `(x, y)` or running melee collision detection runs in constant time $O(1)$, avoiding full entity-array scans.
+
+### FloorStats Cache
+NPC lifecycle events (`floor_stats_npc_died()`, `floor_stats_npc_spawned()`) update per-floor counters incrementally. Emergency respawn checks read the counters of a floor (`floor_stats_get()`) in $O(1)$ time without traversing dormant floors.
+
+### NPC lifecycle, floor walks and entity lookups
+- **`npc_set_active()`** (`npc_index.c`) is the only place where an NPC becomes alive or dead: it keeps the floor counters and the per-floor index in step. Set the final fields (floor, template, archetype) first, then activate; never write `n->active` by hand.
+- **Floor walk:** `FloorIter it = floor_iter(game, f); for (int i; (i = floor_iter_next(&it)) >= 0;)` visits the active NPCs of floor `f`, in slot order, exactly like a scan of all `MAX_NPCS` slots would (NPCs spawned during the walk included), in O(NPCs on the floor). Use it for every per-floor query instead of a full scan.
+- **Entity id → NPC:** `npc_by_entity_id()` answers in O(1) from a map rebuilt every round, to which `npc_set_active()` adds an NPC the moment it is activated; an id that is not a living NPC (a character, a tombstone) is a miss, never a walk of the table. Entity ids are unique: `game->next_id` only grows and is saved with the NPCs.
+- **New NPCs:** `npc_alloc()` hands out a slot (one that never held a creature first, a dead monster last) and `npc_spawn_item()` puts an item on the ground; never look for a free slot by hand, the leftovers of its previous tenant (loot, name, timers) would come along.
+
+### The game state: `Game`
+The server has no global game state. `struct Game` (`src/server/game.h`) holds the world, the client and NPC tables, the tables of the merchants' shops and of the loot (`NpcPools`, below), the round counter, the next entity id, the world event, the tombstones, the clouds and the data directory; `main()` creates one with `game_create()` and every function that reads or changes the game takes it as `Game *game` (the tests and the fuzzers own one too, `g_game` in `tests/integration/fixture.c`). What stays `static` inside a module is derived or technical: the per-floor NPC index and the entity map (`npc_index.c`, rebuilt from the NPC table), the connection table, the writer and login queues.
+
+### Server source layout
+The sources are layered, and `tools/check_deps.py` (`tools/quality.sh deps`, CI) refuses an include that points upward or a cycle among the headers:
+
+| Layer | Files | Knows about |
+| --- | --- | --- |
+| shared | `include/`, `src/shared/` | rules, data, map, protocol; nothing of the server or the client |
+| model | `server.h`, `server_entities.h`, `auth.h` | the types of the server |
+| infra | `server_log`, `server_metrics`, `combat_log`, `persist`, `writer`, `login_worker`, `server_conn`, `server_tls`, `pathfinding` | files, sockets, threads; not the game being played |
+| game | everything else | the simulation |
+| commands | `cmd_*.c`, `server_commands.c` | the text commands of the players |
+| main | `main_server.c`, `server_startup.c`, `server_login.c`, `server_options.c` | the composition of the program |
+
+The client (`src/client/`) is a separate program and includes `shared` only.
+
+- `main_server.c`: `main()`, the event loop (`run_server`), message dispatch, shutdown. `server_options.c` the command line, `server_startup.c` the data directory, the game data and the world (loaded or generated), `server_login.c` connections being accepted and logins being finished.
+- `server_state.c`: `game_create()` / `game_destroy()`.
+- `server_move.c`: one step of a player (`MSG_MOVE`): bump into a merchant, loot, a monster or a player, or walk onto the tile. `server_tiles.c` what the tile does (stairs, doors, entity grid), `server_traps.c` the traps.
+- `server_world.c`: the game tick (`update_world`: autosave, global event, player rounds, NPC rounds, density monitor), `npc_alloc()`. `npc_index.c`: `npc_set_active()`, the floor counters, the per-floor index and the entity map.
+- `server_combat.c` attacks and kills, `server_loot.c` what a monster drops and the artifacts, `server_spawn.c` the population of the city and of the dungeon, `tombstone.c` the remains of a dead character.
+- `player_stats.c` what is computed from a character (totals, armor class, weight, level), `player_store.c` its save file, `inventory.c` finding and removing what it carries.
+- Connections: `server_conn.c` owns every socket: TLS handshake, receive buffer, send queue, deferred removal and the refusal slots; `server_tls.c` the certificate and the TLS context; `server_metrics.c` the duration histograms; `server_net.c` encodes the messages for a client. The codec itself (`src/shared/wire.c`) is generated from `protocol/messages.json`, and `src/shared/tls_common.c` holds what client and server share (TLS 1.3 context, ALPN, fingerprints). On the client, `client_tls.c` runs the session and the trust decision, `known_servers.c` the trust-on-first-use store.
+- Text commands: `server_commands.c` holds the command table and `handle_text_cmd()`; the handlers live in one file per group: `cmd_character.c` (help, train, stats, rest, save), `cmd_social.c` (party, trade, chat, block list, leaderboard), `cmd_shop.c` (merchants), `cmd_items.c` (inventory, lore, study, use), `cmd_equip.c` (wear, remove, belt), `cmd_ground.c` (pickup, get, drop, throw), `cmd_magic.c` (spells, cast), `cmd_world.c` (look, search, disarm, examine, doors), `cmd_mine.c` (tunnel) and `cmd_dm.c` (the `dm_*` commands and their own table).
+- Shared code: `map.c` generates a dungeon floor, `map_city.c` the city, `map_traps.c` the traps; `data_loader.c` reads the bestiary and the spells, `data_items.c` the items.
+
+A number typed by a player goes through `src/shared/strnum.c` (`parse_int`, `scan_ints`, `str_to_int`: no undefined behaviour, clamped) and is checked against its range before it indexes anything; a line of a 1-based list (`buy 3`) through `list_index()`.
+
+A new command is one handler `bool cmd_x(Client *c, const char *cmd, Game *game)` (true when it handled the command) and one row of `COMMANDS[]`: exact names and/or prefixes separated by `|`, and a usage line. Every prefix ends with a space, so it matches the whole word followed by arguments (`"train "` never matches `trainer`); list the bare word among the names when the command also works without arguments. The table is walked in order and the first match whose handler returns true wins, so a prefix row covers every later row it matches (`"c <n>"` is cast, `"c"` alone is close). When no handler accepts the line, the player gets the usage of the row named by the first word, otherwise "Unrecognized command". The `command_table` and `command_words` tests of the harness check all this.
+
+### Spells: data, resolution, balance
+A spell does what the `effect` object of its record in `data/spells.json` says; nothing is read from the description. `data/schema/spells.schema.json` documents every field:
+
+```json
+"effect": {"kind": "damage", "target": "circle", "range": 30, "radius": 4,
+           "roll": "save", "save": "dex", "on_save": "half",
+           "dice": {"count": 8, "sides": 6}, "damage_type": "fire"}
+```
+
+- **kind**: `damage` (with an optional `condition` rider), `heal`, `condition`, `buff` (`stat` ac/attack/damage, `value`, `rounds`), `special` (a `handler`, with `radius`, `value`, `rounds` and `dice` as its parameters). Every spell has a mechanic: there is no kind for spells that do nothing. **target**: `single`, `self`, `circle`, `cone`, `line`, `cloud`. Ranges and radii are cells of 5 feet. **roll**: `auto`, `attack` (spell attack against AC) or `save`; with an attack or no roll, `save` names the saving throw that resists only the rider. `dc` (fixed) is for martial maneuvers; spells use 8 + proficiency + the class casting ability. `cantrip_scaling` multiplies the dice at levels 5, 11 and 17. `terrain` (wall, ice, mud) is left at the origin after the effect.
+- **Code**: `src/shared/spell_effect.c` parses the object (the server refuses to start on an invalid one), `src/shared/spell_rules.c` resolves an effect against one target with no world (attack, save, crit, half damage, rider, resistances), `src/server/spell_cast.c` picks the target and the area, applies the outcome and the rewards, `src/server/aoe.c` holds the area geometry, the terrain chemistry and the clouds.
+- **Handlers**: `spell_router.c` holds those of control and travel (charm, dominate, animate dead, summon elemental, teleport, blink, invisibility, class transit); `spell_utility.c` those of exploration and support: `sense` (creatures, things on the ground and the stairs within `radius`), `find_traps` (found within `radius`; `value` 1: disarmed), `identify` (`value` items, none: all), `light` (sight of `value` cells for `rounds`), `mend` (`value` tenths of durability to the most worn item), `nourish` and `cleanse` (hunger, conditions; their `dice` heal), `remove_curse`, `shelter` (a rest with no enemy within 10 cells: hit points, not slots), `shape_earth` (stone within `radius` opens, never in town), `rally` (where the party is) and `summon` (`value` creatures of the floor's bestiary for `rounds`).
+- **Allies**: a summoned, raised or dominated creature has the ally behavior (`ai_make_ally`, `src/server/ai.c`): it fights the hostile creatures within 8 cells, follows its caster, is never a target of the caster's spells or steps, and ends when its rounds run out or its caster leaves the floor (a dominated monster turns hostile again, any other ally leaves the world and never respawns). Monsters do not see an invisible character; an attack or a damaging or controlling spell ends invisibility.
+- **A new handler**: a `SpellHandler` value (`include/spells.h`), its name in `k_handlers` (`spell_effect.c`), the function in `g_handlers[]` (`spell_router.c`), the name in the schema enum, its case in `check_handler` of `tests/integration/harness_spells.c`; `tools/check_data.py` checks that the schema and the engine list the same handlers and conditions.
+- **Tests**: `tests/test_spell_rules.c` (parser and resolution, forced d20), the `spell_*` cases of the integration harness (one per kind of effect through the real `cast` command, and `spell_every_effect`: every spell of the data cast once, checked against its record), `tests/spell_balance.c` (below).
+- **Balance**: `spell_balance` simulates every damage spell with the game's loader and resolution against the reference target of its level and checks the expected damage, heals (the dice of `cleanse` and `nourish` included), buffs, unresisted control, light and summonings against `tests/spell_balance.json`; `build-tests/spell_balance data tests/spell_balance.json --report` prints the whole table. A change of the data that breaks a limit fails CI: fix the spell, or move the limit in the same change with the reason in the changelog.
+
+---
+
+## 4. Threading & Synchronization Model
+
+The server runs the game on one thread (the `epoll` main loop, fixed 200 ms tick) and moves the slow work off it:
+- **Writer thread** (`src/server/writer.c`): saves are encoded in memory by the game loop and written by this thread (write, `fsync`, `rename`). A process killed at any point of that sequence leaves the previous file or the new one, never half of one (`crash_during_save` in the harness kills a child at each point; `test_killed_server_recovers` kills a real server). One pending job per file at most: a newer snapshot replaces a queued one. `writer_wait_for(path)` blocks until a file's pending writes are done. Before `writer_start()` and after `writer_stop()` every write is synchronous (startup, shutdown, tests).
+- **Login worker** (`src/server/login_worker.c`): DM password check, save read and Argon2id verify/hash. `login_begin()` submits a job and marks the slot `login_pending`; the worker signals an `eventfd` and `login_finish()` applies the result on the main loop.
+- **Child processes:** the DM PDF generator is spawned and reaped with `waitpid(WNOHANG)` once per loop pass (`pdf_jobs_poll()`).
+- **Leaderboard:** `top` scans the saves at most once a minute and takes the characters online from memory.
+
+### The round and its budget
+The main loop runs `update_world()` on a fixed-step clock: one round every 200 ms (`TICK_MS`), at most five in a row after a stall, never more. One call is one round. A round has a budget of 50 ms; the pass of the event loop around it (messages, round, flush) half a round.
+
+- **Floors without characters sleep.** A living NPC acts, saves against its conditions and ages its effects only on a floor where at least one character stands. On the other floors the dead still count down to their respawn and the merchants restock; nothing else moves. Of some 36,000 NPCs alive in a new world, a round visits those of at most 64 floors.
+- **The autosave is split.** Once a minute `autosave_step()` runs in two consecutive rounds: the characters and the world, then the NPC table. Each part is encoded on the game thread and written by the writer thread. The record of an NPC carries a shop only for a merchant and loot only for the remains of a character or an item on the ground.
+- **Swarms** count their neighbours through the entity grid and split into slots from `npc_alloc()`, up to 500 living NPCs on the floor. A clone does not come back once killed (`respawn_timer` -1): the dead clones waiting for a respawn used to fill the 50,000 slots. A full table gives new loot the slot of a dead monster, never of a dead boss.
+- **Rate limits.** A client gets one step per 200 ms and, separately, ten text commands per second; over that the commands are dropped and the client is told once per second.
+
+`server_metrics.c` keeps a histogram of the duration of every round and of every loop pass (250 µs buckets). `dm_telemetry` shows mean, p50, p99 and maximum, the rounds over budget, the depth of the writer queue and the logins waiting; the server logs a `[PERF]` line every 5 minutes and one for its whole life at shutdown.
+
+Measured on the 2-core machine the project is developed on (Release, clang), 64 characters in a new world:
+
+| Measure | Before | Now | Limit |
+| --- | --- | --- | --- |
+| Round, one character per floor (`tick_bench` spread), p99 | 66 ms | 13–17 ms | 50 ms |
+| Round, 64 characters on one floor (`tick_bench` crowd), p99 | 59 ms | 9 ms | 50 ms |
+| Autosave on the game thread, longest round | 58 ms | about 20 ms | 50 ms |
+| Round on a real server, 64 TLS clients (`loadtest.py`, 500 s), p99 / maximum | — | 18 / 32 ms | 50 ms |
+| Answer to a command, 64 TLS clients, p50 / p99 | — | 0.5 / 44 ms | 250 ms |
+
+The NPC record is 784 bytes (a static assertion keeps it under 1 KB): the shop of a merchant and the items of the remains of a character or of an item on the ground, 4.4 KB that a monster never used, are entries of two side tables (`src/server/npc_store.c`: 256 shops, 1,024 bags of 30 items), named by `shop_id` and `loot_id` in the record. An entry belongs to the `entity_id` that took it, so a reused slot or a copied record never sees another NPC's shop or loot; a full table takes back the entries no NPC names any more (loot: no active NPC), so nothing is freed by hand. The table of 50,000 NPCs went from 259 MB to 39 MB, plus 3 MB of side tables; on the bench the spread round went from a mean of 9.6 to 6.5 ms and the autosave of the NPC table from 27 to 11 ms. `npcs.dat` (version 3) writes a shop and loot only where there is one.
+
+In the client, rendering and networking execute on separate POSIX threads:
+- **Network Thread:** Manages TCP socket communication, parses incoming binary packets (`MSG_STATE`, `MSG_MAP_CHUNK`, `MSG_SPELL_VFX`), and updates the master state under `g_state_mutex`.
+- **Render Thread:** Executes GLFW event polling and the Vulkan draw loop. To prevent data races, each frame captures a `FrameSnapshot` copy of volatile coordinates and maps.
+- **VFX & FCT Mutexes:** Dynamic particle arrays and floating combat text use dedicated fine-grained locks (`g_particles_mutex`, `g_fct_mutex`) to allow high-frequency spawns without locking the network loop.
+
+---
+
+## 5. Developer & Balancing Workflows
+
+### 1. Game Balance Analysis
+Combat interactions are recorded as structured JSON records in `combat_log.json`, in the server state directory (`state/` in a development tree). Run the statistical analysis script to review balance data:
+
+```bash
+# Run balance analysis report (finds state/combat_log.json by itself)
+python3 tools/analyze_balance.py
+```
+
+The script outputs four analytical domains:
+- **Attack Performance:** Accuracy %, critical hit frequency, average damage per hit.
+- **Saving Throw Health:** Pass/fail rates by effect type and DC.
+- **Spell Metrics:** Output efficiency (damage/healing per cast) and resistance rates.
+- **Lethality Map:** Floor-by-floor mortality ASCII chart and top killer units.
+
+### 2. Web Data Studio
+The `tools/web/` directory contains self-contained HTML/JS workbenches for dataset curation:
+- `tools/web/menu.html`: Main navigation hub.
+- `tools/web/bestiary.html`: Monster stats, archetypes, and abilities editor.
+- `tools/web/items.html`: Weapon, armor, and magic artifact editor.
+- `tools/web/spells.html`: Spell mechanics, progression tiers, and grimoires editor; the engine `effect` of a spell is edited as JSON and summarized in its detail view.
+
+### 3. Dungeon Master (DM) Runtime Telemetry
+Administrators logged in with DM credentials can monitor engine performance directly from the in-game console:
+- `dm_telemetry`: rounds played, clients, NPCs and traps; duration of the round and of the event-loop pass (mean, p50, p99, maximum, how many over budget); writer queue and logins waiting.
+- `dm_boss <floor>`: Query the boss status and loot on a specific floor.
+- `dm_mapfloor` / `dm_pdf <floor>`: Dump color-coded 2D layout PDFs of dungeon levels. The generator runs in the background (at most two at a time, one per floor); the DM is told when the PDF is ready.
+
+---
+
+## 6. Testing & CI Standards
+
+The quickest loop is `./build.sh` (Release build + both suites) or `./build.sh -dwa` (ASan/UBSan, `-Werror` and cppcheck, close to what CI runs); see `BUILD.md`.
+
+The standalone test suite resides in `tests/` and mirrors production compiler flags. By hand:
+
+```bash
+# Compile and run unit tests
+cmake -B build-tests tests -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-tests --parallel $(nproc)
+ctest --test-dir build-tests --output-on-failure
+
+# Server integration tests (real server process + in-process harness)
+cmake -B build-integration tests/integration -DCMAKE_BUILD_TYPE=Debug \
+      -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+cmake --build build-integration --parallel $(nproc)
+ctest --test-dir build-integration --output-on-failure
+```
+
+The in-process harness (`tests/integration/server_harness.c`) and the command fuzzer share `tests/integration/fixture.h`: game data, an empty world, NPC table and socketpair-backed players. The cases of the harness are grouped by subject: `harness_spells.c` (spells), `harness_commands.c` (shops, DM commands, sleeping floors, autosave), `harness_combat.c` (attacks, loot, death and tombstones, the combat log), `harness_world.c` (every trap, search and disarm, look, the services of the town, mining, steps), `harness_items.c` (items, merchants' services, level up, social commands), `harness_rounds.c` (the rounds of the world, the monsters' AI, the DM reports) and `harness_magic.c` (the spells of exploration and support, allies, invisibility); `harness_util.c` gives them a fresh world, a character, a monster and the text a character received. Each case runs in its own process (`server_harness <case>`), so a crash fails one case only. `tests/fuzz/` holds the libFuzzer targets (clang only, see below). The source lists of the server and of the shared code are defined once, in `cmake/DragonGL.cmake` (`DRAGONGL_SERVER_SRCS`, `DRAGONGL_SHARED_SRCS`), and used by the main project, the integration tests and the fuzz targets: a new translation unit is added there.
+
+### Quality checks: `tools/quality.sh`
+
+Every quality gate of CI runs locally with one command; build trees go to `build-quality/`. The clang tools must be version 18, the version CI pins (Ubuntu 24.04).
+
+| Check | What it does | Fails when |
+| --- | --- | --- |
+| `format` / `format-fix` | clang-format 18 with `.clang-format` on every C file of the project (not `third_party/`) | a file is not in the style (`format-fix` rewrites them) |
+| `tidy` | clang-tidy 18 with `.clang-tidy` on the main project, the unit and integration tests and the fuzz targets, one process per file | any finding (`WarningsAsErrors: '*'`) |
+| `protocol` | `tools/gen_protocol.py --check`: the files generated from `protocol/messages.json` (`include/protocol_gen.h`, `include/wire.h`, `src/shared/wire.c`, `tests/test_protocol_conformance.c`, `tests/protocol_vectors.json`, sections 2-3 of `PROTOCOL.md`) are up to date | a generated file differs from what the table gives |
+| `data` | `tools/check_data.py`: `data/schema/*.schema.json` (JSON Schema 2020-12), references resolved by name (book spells, `cast_spell`), unique names, class consistency of books, canonical form (2-space indent, UTF-8) | any error (`tools/check_data.py --fix` rewrites the form) |
+| `ascii` | `tools/check_ascii.py`: the string literals of the C sources and the text of the game data are ASCII, the only characters the font of the HUD draws | a character outside ASCII, with its file and line |
+| `spelling` | codespell (`.codespellrc`: the game words it would take for typos) on the game data, the documentation, the man pages, the sources and the tools; `LORE.md` is left out, its catalogue cuts texts mid-word | a known misspelling |
+| `deps` | `tools/check_deps.py`: the layers of the source tree (see *Server source layout*) and the include graph of the headers | an include that points to a higher layer, a cycle |
+| `metrics` | `tools/metrics.py`: function and file length (no function over 120 lines, no file over 1,000), coverage | a value over `tools/quality_limits.json` |
+| `coverage` | unit + integration suites built with `-fprofile-instr-generate -fcoverage-mapping`, every process (servers spawned by the network tests included) writes its profile; `llvm-cov` report of `src/server` + `src/shared` in `build-quality/coverage/` (`report.txt`, `html/`) | line coverage under `coverage_line_percent` |
+| `tsan` | the integration suite under ThreadSanitizer: the in-process harness and the network tests with a TSan server | any report |
+| `fuzz [S]` | the libFuzzer targets of `tests/fuzz` (wire decoders, save-file readers, text commands), S seconds each (default 60), with seeds written by the targets themselves | a crash, leak or timeout; the input goes to `build-quality/fuzz/artifacts/` |
+| `bench` | `tests/integration/tick_bench` in a Release build: 600 rounds with 64 characters in a full world (one per floor, then all on one floor) and the autosave | a p99, or the longest autosave round, over `tests/bench_limits.json` in two runs (a run over the limits is measured once more: a stalled shared machine fails one run, a slower round both) |
+| `load [S]` | `tools/loadtest.py` with a Release server: 64 TLS clients walk to the dungeon and play for S seconds (default 60), the server is stopped under load and started again | a lost connection, round p99 or command p99 over the limits, a slow or failed shutdown, a character not saved |
+| `play [S]` | `tools/playtest.py` with a Release server: a character of every class plays for S seconds (default 300), down the dungeon on the map the server sends, fighting what is in the way and typing the commands a player types | a command with no answer in 5 s, a character that cannot move for 30 s away from a boss floor, a lost connection, an "Unrecognized command" for a command of its list, a server that exits or a sanitizer report |
+| `campaign [R [S]]` | `tests/integration/campaign_sim` in a Release build: the world of seed S (default 1) and a character of every class, each played by a bot inside the server process (commands and steps through the server's own code) for R rounds (default 150,000: about 8 hours of game time, 10 minutes of a 2-core machine). The server stops and starts again every 20,000 rounds, a clean stop and a crash in turn (the autosave then runs every 300 rounds, a minute of the server); after a clean restart every character and every floor must be as before. The report gives, per class, the deepest floor, the level, the deaths, the rounds to every tenth floor and why it stopped: the conquest, the rounds, or no progress for 60,000 rounds. Every 1,000 rounds the world is checked against its invariants: every floor keeps the creatures that respawn it was generated with, the table of the NPCs keeps 2,000 free slots, the swarm clones stay within 64 a floor and the counters of the floors match a count of the table (the line `world:` of the report). `DGL_CAMPAIGN_TRACE=<class>` follows one bot, `DGL_CAMPAIGN_SURVEY=1` describes the world floor by floor (see the head of the file) | a clean restart changes a character or a floor; the world breaks an invariant; seed 1 and 150,000 rounds only: fewer conquests than `campaign_conquests_min` of `tools/quality_limits.json` (a ratchet, like the coverage) |
+| `links` / `links-external` | `tools/check_links.py` (after its own tests): links between the Markdown files, `#anchors`, files of the tree named in backticks; `links-external` also fetches every http(s) link | a link to a file or heading that does not exist, a named file that is gone, a URL that does not answer |
+| `commands` / `commands-fix` | `dragongl_server --print-commands` against `docs/COMMANDS.md` | the file is not what the command table (`src/server/cmd_help.c`) gives (`commands-fix` writes it) |
+| `man` | the man pages as installed, through `mandoc -T lint -W warning` | any warning |
+| `repro` | two copies of the tree at different paths, RelWithDebInfo, installed | a file that differs, or one that names its build directory |
+| `all` | all of the above but `bench`, `load`, `play` and `campaign`, fuzzing 30 s per target | |
+
+```bash
+tools/quality.sh format-fix         # before a commit that touches C code
+tools/quality.sh format tidy data   # the static checks
+tools/quality.sh coverage metrics   # numbers next to their limits
+tools/quality.sh fuzz 300           # a longer fuzzing session
+tools/quality.sh bench load 300     # performance, on a quiet machine
+tools/quality.sh campaign           # can the game be played to its end?
+```
+
+The campaign of 2026-11-22, four worlds (the default seed 20261121 and seeds 1 to 3) of 150,000 rounds each, twelve characters each:
+
+- Without restarts the dungeon was conquered 39 times out of 48, by every class in at least two worlds (the Monk in all four), in 43,900 to 94,800 rounds: 2.4 to 5.3 hours of game time.
+- With a restart every 20,000 rounds (28 in all, 12 of them crashes) every clean restart gave back every character and every floor as they were, every crash came back to the last saves, and the game went on: 27 conquests out of 48, by ten classes (not the Sorcerer and the Wizard), in 50,800 to 124,900 rounds. Fewer than without restarts: a crash takes back what was done since the last autosave, and a bot starts its errands again. 8 deaths came in the 1,000 rounds after a restart.
+- What stops the bots that do not finish is a death more than a wall: a character dies on a deep floor, comes back to the town with nothing, and has to win back the gold and the book of its transit spell.
+
+Those numbers came from a world that emptied itself. The swarm clones were not counted by the cap of their floor (it counted the creatures that respawn, and a clone never does), so they grew until they filled the table of the NPCs, and from then on every new clone took the slot of a dead monster waiting for its respawn, on any floor: by round 50,000 floors 1 to 3 had no monster left, and the deep floors were thinned out too. Five bots that had lost everything on floors 94 and 95 then found nothing to hunt near the town for 60,000 rounds. With the clones capped at 64 a floor and kept out of the slots of the dead (2026.11.22.10), every floor keeps its monsters, and the same campaign (seed 1, a restart every 20,000 rounds) gives 1 conquest out of 12 (the Fighter, round 117,695): seven classes stop at floor 71, the densest walk of floors 65 to 79 (18 monsters, 4,919 hit points along it), where they die and start again. That wall was a second defect (2026.11.22.11): the archetype of a monster of the bestiary changed the stats of its entry, a dragon with twice its hit points, +3 armour class and 5d10 for the 4d6 of its entry, and the dragons are 207 of the 482 monsters of floors 56 to 100, the only ones from floor 71 on. With every monster as its entry says (LORE.md, Monster Defences and Attacks), the same campaign gives 4 conquests out of 12 (the Barbarian, the Cleric, the Fighter and the Paladin, in 51,959 to 73,262 rounds), and the Druid and the Rogue at floor 94 and the Monk at 83 still going down when the 150,000 rounds end. The Bard, the Sorcerer, the Wizard and the Warlock stop between floors 67 and 72: alone, a caster meets a room of ten or twelve monsters of the last tier between it and the stairs, the whole room comes at the first blow (the aggro of a group), and the bot goes back to the town to heal and finds the room again. That is the play of a careful bot, not of a party or of a player who draws the monsters out one by one.
+
+The campaign is deterministic: the same seed and rounds give the same game, the same report and the same server log, line for line, on any machine and at any speed. It saves by its rounds, not by the clock (`autosave_set_period(0)`), and the tombstones load in the order of the deaths (`death_turn`), not of the directory; a crash takes the world back to the same save every time. That is what lets `campaign_conquests_min` be a gate.
+
+The campaigns of the day found and fixed in the game: the bounty of a boss lying on its spawn point kept it from coming back (its stairs sealed for whoever had not beaten it); the dead swarm clones filled the table of the NPCs and new loot then took the slots of the dead bosses; `eat` ate the first item with "ration" in its name (a *Ring of Regeneration*); every body armour ignored DEX, so a nimble character lost armour class by putting one on (the Monk, wearing plate over a DEX of 30, died more often than any other class); in three worlds of ten the town sold no arrows, and in none a pick or a shovel to dig through the walls a trap raises. The barrier of floor 73 in the world of the default seed was the bot's: it drank Potions of Healing (7 hit points) at 300 hit points, fought every monster it passed and started the floor again after every retreat. `DGL_CAMPAIGN_SURVEY=1` showed that floor 73 is like the others (the walk from the stairs up to the stairs down, the monsters along it).
+
+`tools/quality_limits.json` is a ratchet: a change may tighten a limit (more coverage, shorter functions), never loosen it. A sanitizer report in a server started by `test_server.py` fails the test that started it (the server log is scanned), so the ASan/UBSan and TSan runs of the network tests are real gates.
+
+A fuzz crash is replayed with the target binary: `build-quality/fuzz/build/fuzz_text_cmd build-quality/fuzz/artifacts/fuzz_text_cmd-crash-…`. Fix it, then add the case to the integration harness or the unit tests so it stays fixed.
+
+### CI
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+* Release builds with clang and gcc and `-Werror` (`-Wall -Wextra -Wpedantic -Wshadow -Wconversion`);
+* the unit tests (Release and ASan/UBSan), the server integration tests under ASan/UBSan, the client smoke test under ASan/UBSan (Xvfb, lavapipe, Vulkan validation layer);
+* a server-only build without any graphics package, the RPM build with rpmlint in a Fedora container;
+* static analysis: cppcheck and `tools/check_release.py`; clang-tidy; format, game data, spelling, links of the documentation, dependencies and metrics;
+* coverage (report uploaded as an artifact and summarized on the run page), ThreadSanitizer, fuzzing 60 s per target;
+* the same build and the integration tests in a Fedora container with gcc;
+* release checks: the command reference against the command table, the man pages through mandoc, the reproducible build and the reproducible source tarball;
+* performance: the benchmark of the round and a one-minute load test with 64 clients, against `tests/bench_limits.json`.
+
+`.github/workflows/release.yml` publishes a GitHub release when a version tag is pushed ([docs/RELEASING.md](docs/RELEASING.md)). `.github/workflows/links-nightly.yml` fetches the external links of the documentation every night. `.github/workflows/fuzz-nightly.yml` fuzzes each target for 20 minutes every night on a corpus kept between runs; `.github/workflows/load-nightly.yml` keeps 64 clients playing for 30 minutes every night; `.github/workflows/campaign-nightly.yml` plays the campaign every night twice, on the world of seed 1 (the ratchet of the conquests) and on a world of the day (the date as its seed, replayed with `tools/quality.sh campaign 150000 <seed>`), their reports on the page of the run; `.github/workflows/soak-weekly.yml` plays the real server built with ASan/UBSan for four hours every Sunday (`tools/playtest.py --work`, six segments of 40 minutes on the same world, the server stopped and started between them), then reads its log with `tools/analyze_log.py --strict`; `.github/workflows/codeql.yml` runs GitHub code scanning (security-and-quality) on `main` and weekly.
+
+False positives are suppressed where they occur, with the reason: `// cppcheck-suppress <id>` and `// NOLINT(<check>)` / `// NOLINTNEXTLINE(<check>)`. A clang-tidy check that does not fit the code base is disabled in `.clang-tidy`, with a comment that says why.
+
+### Guidelines for Contributions:
+1. **Warning-Clean Build:** All C code must compile cleanly with `-Wall -Wextra -Wpedantic -Wshadow -Wconversion` using clang and gcc, pass clang-tidy, and be formatted with clang-format (`tools/quality.sh format-fix`).
+2. **Data Structure Bounds:** Enum-indexed arrays must be sized using `MAX_*` sentinels to guarantee type safety without bitmask overflow.
+3. **Wire and file formats:** a message is changed in one place, its entry in `protocol/messages.json` (fields, ranges, checks, an example), then `tools/gen_protocol.py` regenerates the structs, the codec, the conformance test, the vectors and the message sections of `PROTOCOL.md` (`tools/quality.sh protocol` fails on a stale file). Every wire change increments `version` there, which is also the ALPN protocol `dragongl/<version>`. On-disk formats have their own version numbers in `src/server/persist.h`.
+4. **Function size:** within the limits of `tools/quality_limits.json` (`tools/quality.sh metrics`); split by responsibility (see `update_world`, `check_traps`, the item and spell loaders).
+5. **Comments say why the code is the way it is now.** The history of a change (what was wrong, which defect it fixed) belongs to `CHANGELOG.md`, not to the source.
+6. **Numbers from text** go through `include/strnum.h` (`parse_int`, `parse_ll`, `parse_double`, `str_to_int`, `scan_ints`): they detect overflow and missing digits, where `atoi`/`sscanf` have undefined behavior or silently return 0.
+7. **Game data** follows `data/schema/`; a new field is added to the schema in the same change (`tools/quality.sh data`).

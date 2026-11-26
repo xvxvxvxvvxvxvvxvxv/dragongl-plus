@@ -30,6 +30,7 @@
 #include "scene_internal.h"
 #include "textures.h"
 #include "protocol.h"
+#include "client_proto.h"
 #include "species.h"
 #include "classes.h"
 #include <string.h>

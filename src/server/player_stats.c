@@ -1,0 +1,654 @@
+/*
+ * DRAGON GL - 3D ARCANE ENGINE
+ * Copyright (C) 2026 Nicola Taibi
+ * License: GPL-3.0-or-later
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/*
+ * player_stats.c - What a character is worth: total abilities, AC, weight, speed, vision,
+ * item names and wear, experience and levels, starting gear.
+ */
+
+#include "server_plus.h"
+#include "inventory.h"
+#include "item_effects.h"
+#include "server_combat.h"
+#include "server_internal.h"
+
+#include "player.h"
+#include "server_log.h"
+
+/*Clamp a client-provided stat to the playable range 3..18.*/
+int clamp_stat(int v) {
+    if (v < 3) {
+        return 3;
+    }
+    if (v > 18) {
+        return 18;
+    }
+    return v;
+}
+
+/*The abilities the active items change (item_effects.h): first what they
+ * add ("+2, to a maximum of 20": never lowering a higher score), then the
+ * scores they set ("your Strength score is 19": only if it was lower).*/
+static void worn_abilities(Client *c, int *score[6]) {
+    ItemInstance *items[MAX_ACTIVE_ITEMS];
+    int n = player_active_items(c, items);
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < n; i++) {
+            const ItemWorn *w = &item_database[items[i]->template_idx].worn;
+            for (int a = 0; w->any && a < 6; a++) {
+                int add = w->ability_add[a];
+                int v = *score[a] + add;
+                if (pass == 0 && add > 0 && w->ability_max > 0 && v > w->ability_max) {
+                    v = *score[a] > w->ability_max ? *score[a] : w->ability_max;
+                }
+                if (pass == 0) {
+                    *score[a] = v;
+                } else if (w->ability_set[a] > *score[a]) {
+                    *score[a] = w->ability_set[a];
+                }
+            }
+        }
+    }
+}
+
+/*The abilities with what is worn: every equipment slot (the bracers of the
+ * arms too) and ring adds its template's bonuses and an artifact its own
+ * STR, DEX and CON; then the magic items raise or set them
+ * (worn_abilities).*/
+void get_total_stats(Client *c, int *ts, int *td, int *tc, int *ti, int *tw, int *th) {
+    *ts = c->str;
+    *td = c->dex;
+    *tc = c->con;
+    *ti = c->intel;
+    *tw = c->wis;
+    *th = c->cha;
+    for (int i = 0; i < EQUIP_SLOT_COUNT + 10; i++) {
+        const ItemInstance *s =
+            i < EQUIP_SLOT_COUNT ? equip_slot(c, i) : &c->slot_rings[i - EQUIP_SLOT_COUNT];
+        if (s->template_idx == -1) {
+            continue;
+        }
+        const ItemTemplate *it = &item_database[s->template_idx];
+        *ts += it->str_bonus;
+        *td += it->dex_bonus;
+        *tc += it->con_bonus;
+        *ti += it->int_bonus;
+        *tw += it->wis_bonus;
+        *th += it->cha_bonus;
+        if (s->is_artifact) {
+            *ts += s->artifact_str_bonus;
+            *td += s->artifact_dex_bonus;
+            *tc += s->artifact_con_bonus;
+        }
+    }
+    int *score[6] = {ts, td, tc, ti, tw, th};
+    worn_abilities(c, score);
+}
+
+// -----------------------------------------------------------------------
+static const char *blessing_word(ItemBlessing b) {
+    switch (b) {
+    case BLESS_BLESSED:
+        return "Blessed ";
+    case BLESS_CURSED:
+        return "Cursed ";
+    default:
+        return "";
+    }
+}
+
+static const char *quality_word(ItemQuality q) {
+    switch (q) {
+    case QUALITY_RUSTY:
+        return "Rusty ";
+    case QUALITY_FINE:
+        return "Fine ";
+    case QUALITY_MASTERWORK:
+        return "Masterwork ";
+    default:
+        return "";
+    }
+}
+
+static const char *element_word(ItemElement e) {
+    switch (e) {
+    case ELEM_FLAMING:
+        return "Flaming ";
+    case ELEM_FROST:
+        return "Frost ";
+    case ELEM_SHOCKING:
+        return "Shocking ";
+    case ELEM_POISONOUS:
+        return "Poisonous ";
+    default:
+        return "";
+    }
+}
+
+void get_full_item_name(const ItemInstance *inst, char *buf, size_t max_len) {
+    if (!inst->is_identified) {
+        snprintf(buf, max_len, "??? (unknown)");
+        return;
+    }
+    //Unique Artifact: Uses its proper name directly
+    if (inst->is_artifact && inst->artifact_name[0] != '\0') {
+        const ItemTemplate *tmpl = &item_database[inst->template_idx];
+        char suffix[64] = "";
+        if (inst->to_hit_bonus != 0 || inst->to_dam_bonus != 0) {
+            snprintf(suffix, sizeof(suffix), " (+%d, +%d)", inst->to_hit_bonus, inst->to_dam_bonus);
+        } else if (inst->ac_bonus != 0) {
+            snprintf(suffix, sizeof(suffix), " [+%d]", inst->ac_bonus);
+        }
+        snprintf(buf, max_len, "** %s [%s]%s **", inst->artifact_name, tmpl->name, suffix);
+        return;
+    }
+    const ItemTemplate *tmpl = &item_database[inst->template_idx];
+    char prefix[64];
+    snprintf(prefix, sizeof(prefix), "%s%s%s", blessing_word(inst->blessing),
+             quality_word(inst->quality), element_word(inst->element));
+
+    char suffix[64] = "";
+    if (tmpl->category == ITEM_WEAPON && (inst->to_hit_bonus != 0 || inst->to_dam_bonus != 0)) {
+        snprintf(suffix, sizeof(suffix), " (+%d, +%d)", inst->to_hit_bonus, inst->to_dam_bonus);
+    } else if ((tmpl->category == ITEM_ARMOR || tmpl->category == ITEM_SHIELD) &&
+               inst->ac_bonus != 0) {
+        snprintf(suffix, sizeof(suffix), " [+%d]", inst->ac_bonus);
+    } else if (tmpl->category == ITEM_LIGHT_SOURCE) {
+        snprintf(suffix, sizeof(suffix), " (%d/%d light turns)", inst->durability,
+                 tmpl->max_durability > 0 ? tmpl->max_durability : 100);
+    } else if (tmpl->category == ITEM_FUEL) {
+        snprintf(suffix, sizeof(suffix), " (%d light turns)",
+                 tmpl->duration_turns > 0 ? tmpl->duration_turns : 300);
+    } else if (tmpl->worn.resist_random && inst->current_charges >= 1 &&
+               inst->current_charges <= MAX_DAMAGE_TYPES) {
+        snprintf(suffix, sizeof(suffix), " (%s)",
+                 damage_type_to_name((DamageType)(inst->current_charges - 1)));
+    }
+
+    snprintf(buf, max_len, "%s%s%s", prefix, tmpl->name, suffix);
+}
+
+float get_current_weight(Client *c) {
+    float w = (float)c->gold * 0.01f;
+    ItemInstance *s[] = {&c->slot_head,   &c->slot_neck,   &c->slot_body,  &c->slot_back,
+                         &c->slot_hand_r, &c->slot_hand_l, &c->slot_hands, &c->slot_arm_r,
+                         &c->slot_arm_l,  &c->slot_feet};
+    for (int i = 0; i < 10; i++) {
+        if (s[i]->template_idx != -1) {
+            w += item_database[s[i]->template_idx].weight;
+        }
+    }
+    for (int i = 0; i < 10; i++) {
+        if (c->slot_rings[i].template_idx != -1) {
+            w += item_database[c->slot_rings[i].template_idx].weight;
+        }
+    }
+    for (int i = 0; i < MAX_BELT; i++) {
+        if (c->belt[i].template_idx != -1) {
+            w += item_database[c->belt[i].template_idx].weight * (float)c->belt[i].stack_count;
+        }
+    }
+    for (int i = 0; i < c->backpack_count; i++) {
+        if (c->backpack[i].template_idx >= 0) {
+            w += item_database[c->backpack[i].template_idx].weight *
+                 (float)c->backpack[i].stack_count;
+        }
+    }
+    return w;
+}
+
+/*Seconds between two steps: 0.2, more under a heavy load; haste (boots or
+ * potion of speed) halves it.*/
+float get_movement_cooldown(Client *c) {
+    float w = get_current_weight(c);
+    float limit = (float)c->str * 5.0f;
+    float cd = 0.2f;
+    if (w > limit * 2.0f) {
+        cd = 1.0f;
+    } else if (w > limit) {
+        cd = 0.4f;
+    }
+    return player_hasted(c) ? cd / 2.0f : cd;
+}
+
+int get_equipped_mask(Client *c) {
+    int mask = 0;
+    /*bits 0-9: single slots (head, neck, body, back, hand_r, hand_l,
+   * hands, arm_r, arm_l, feet)
+   * bits 10-19: slot_rings[0..9] (not overlapping with the previous ones)*/
+    if (c->slot_head.template_idx != -1) {
+        mask |= (1 << 0);
+    }
+    if (c->slot_neck.template_idx != -1) {
+        mask |= (1 << 1);
+    }
+    if (c->slot_body.template_idx != -1) {
+        mask |= (1 << 2);
+    }
+    if (c->slot_back.template_idx != -1) {
+        mask |= (1 << 3);
+    }
+    if (c->slot_hand_r.template_idx != -1) {
+        mask |= (1 << 4);
+    }
+    if (c->slot_hand_l.template_idx != -1) {
+        mask |= (1 << 5);
+    }
+    if (c->slot_hands.template_idx != -1) {
+        mask |= (1 << 6);
+    }
+    if (c->slot_arm_r.template_idx != -1) {
+        mask |= (1 << 7);
+    }
+    if (c->slot_arm_l.template_idx != -1) {
+        mask |= (1 << 8);
+    }
+    if (c->slot_feet.template_idx != -1) {
+        mask |= (1 << 9);
+    }
+    /*Rings: bits 10..19 (no overlap with base slot)*/
+    for (int i = 0; i < 10; i++) {
+        if (c->slot_rings[i].template_idx != -1) {
+            mask |= (1 << (10 + i));
+        }
+    }
+    return mask;
+}
+
+int get_vision_radius(Client *c) {
+    if (c->floor_id == 0) {
+        return 50; //In the open city you can see very far
+    }
+
+    // --- BLINDNESS CONDITION ---
+    if (rules_has_condition_t(c->effects, c->effect_count, COND_BLINDED)) {
+        return 0; //If blinded, you see nothing (radius 0)
+    }
+
+    int best_radius = 4; //Minimal vision in the dark (very limited)
+
+    //Check belt and hands for a light source (Torches, Lanterns)
+    ItemInstance *slots[] = {&c->slot_hand_r, &c->slot_hand_l, &c->belt[0],
+                             &c->belt[1],     &c->belt[2],     &c->belt[3]};
+    for (int i = 0; i < 6; i++) {
+        if (slots[i]->template_idx != -1) {
+            const ItemTemplate *it = &item_database[slots[i]->template_idx];
+            if (it->category == ITEM_LIGHT_SOURCE && slots[i]->durability > 0) {
+                if (it->light_radius > best_radius) {
+                    best_radius = it->light_radius;
+                }
+            }
+        }
+    }
+    /*Darkvision of the items (goggles of night...) and light spells (Light,
+     * Darkvision, ...): the largest one counts.*/
+    WornTotals w;
+    player_worn(c, &w);
+    if (w.darkvision > best_radius) {
+        best_radius = w.darkvision;
+    }
+    for (int i = 0; i < c->effect_count; i++) {
+        const ActiveEffect *e = &c->effects[i];
+        if (e->trigger == EVENT_ON_LIGHT && e->duration_rounds > 0 && e->value > best_radius) {
+            best_radius = e->value;
+        }
+    }
+    return best_radius;
+}
+
+int armour_dex(const ItemTemplate *t, int dex) {
+    if (t->ac_dex_max == 0) {
+        return 0;
+    }
+    return dex < t->ac_dex_max ? dex : t->ac_dex_max;
+}
+
+const char *armour_dex_note(const ItemTemplate *t) {
+    if (t->ac_dex_max == 0) {
+        return "";
+    }
+    return t->ac_dex_max <= 2 ? " + DEX (max 2)" : " + DEX";
+}
+
+/*Body armour gives its base (else 10 + DEX) plus the DEX modifier its
+ * kind allows (light all, medium +2 at most, heavy none), its enchantment
+ * and its quality; every other worn piece, shield and ring adds its bonus
+ * and its enchantment, a shield its quality too; a weapon in a hand adds
+ * only an enchantment of its own.*/
+int get_player_ac(Client *c) {
+    int ts, td, tc, ti, tw, th;
+    get_total_stats(c, &ts, &td, &tc, &ti, &tw, &th);
+    int ac_b =
+        (c->slot_body.template_idx != -1) ? item_database[c->slot_body.template_idx].ac_base : 0;
+    int bonus = 0;
+    for (int i = 0; i < EQUIP_SLOT_COUNT + 10; i++) {
+        const ItemInstance *s =
+            i < EQUIP_SLOT_COUNT ? equip_slot(c, i) : &c->slot_rings[i - EQUIP_SLOT_COUNT];
+        if (s->template_idx == -1) {
+            continue;
+        }
+        const ItemTemplate *t = &item_database[s->template_idx];
+        /*Quality counts for armour and shields (Rusty -1 ... Masterwork +2).*/
+        int quality =
+            (t->category == ITEM_ARMOR || t->category == ITEM_SHIELD) ? item_quality_bonus(s) : 0;
+        if (s == &c->slot_body) {
+            bonus += s->ac_bonus + quality;
+        } else if ((s == &c->slot_hand_r || s == &c->slot_hand_l) && t->category != ITEM_SHIELD) {
+            bonus += s->ac_bonus; /*a weapon protects only if enchanted to (an artifact)*/
+        } else {
+            bonus += t->ac_bonus + s->ac_bonus + quality;
+        }
+    }
+    /*Magic items: their AC, the AC some give only to who wears no armour
+     * and carries no shield, and the base AC of a robe of the archmagi.*/
+    WornTotals w;
+    player_worn(c, &w);
+    bool shield = (c->slot_hand_r.template_idx != -1 &&
+                   item_database[c->slot_hand_r.template_idx].category == ITEM_SHIELD) ||
+                  (c->slot_hand_l.template_idx != -1 &&
+                   item_database[c->slot_hand_l.template_idx].category == ITEM_SHIELD);
+    bonus += w.ac + (ac_b == 0 && !shield ? w.ac_unarmored : 0);
+    int unarmored = w.unarmored_base > 10 ? w.unarmored_base : 10;
+    int dex = rules_get_modifier(td);
+    if (ac_b > 0) { /*an armour: what of DEX its kind takes (a heavy one none)*/
+        dex = armour_dex(&item_database[c->slot_body.template_idx], dex);
+    }
+    int final_ac = (ac_b > 0 ? ac_b : unarmored) + dex + bonus;
+    if (rules_has_condition_t(c->effects, c->effect_count, COND_PETRIFIED)) {
+        final_ac += 10;
+    }
+    return final_ac + rules_event_bonus(c->effects, c->effect_count, EVENT_ON_DEFEND);
+}
+
+void damage_item(ItemInstance *it, int amt) {
+    if (it->template_idx == -1 || item_database[it->template_idx].max_durability == 0) {
+        return;
+    }
+    it->durability -= amt;
+    if (it->durability < 0) {
+        it->durability = 0;
+    }
+}
+
+int get_xp_threshold(int level) {
+    const int thresholds[] = {0,      300,    900,    2700,   6500,   14000,  23000,
+                              34000,  48000,  64000,  85000,  100000, 120000, 140000,
+                              165000, 195000, 225000, 265000, 305000, 355000};
+    if (level < 1) {
+        return 0;
+    }
+    if (level > 20) {
+        return 355000;
+    }
+    return thresholds[level - 1];
+}
+
+/*The highest slot level a class has at a character level: full casters
+ * a new one every 2 levels (L9 at 17), half casters every 2 from level 2
+ * (L5 at 10), the martial classes a new Ki level every 3 (L6 at 16).*/
+static int highest_slot_level(ClassType cls, int level) {
+    int top = MAX_SPELL_LEVEL;
+    int at = (level + 1) / 2;
+    switch (cls) {
+    case CLASS_PALADIN:
+    case CLASS_RANGER:
+        top = 5;
+        at = level / 2;
+        break;
+    case CLASS_FIGHTER:
+    case CLASS_MONK:
+    case CLASS_BARBARIAN:
+    case CLASS_ROGUE:
+        top = 6;
+        at = (level + 2) / 3;
+        break;
+    default:
+        break;
+    }
+    if (at < 1) {
+        at = 1;
+    }
+    return at > top ? top : at;
+}
+
+/*The slots of a class at a level (LORE.md, Starting Slots & Progression
+ * Rates): at level 1 a full caster has 4 of L1, 3 of L2 and 2 of L3, the
+ * fighter and the monk 3 Ki of L1, the barbarian and the rogue 2, the
+ * paladin and the ranger 1; every level after the first adds one slot of
+ * the highest level the class has then. A function of class and level
+ * only, so a loaded character gets the same slots as a new one.*/
+void class_spell_slots(ClassType cls, int level, int slots_max[MAX_SPELL_LEVEL + 1]) {
+    memset(slots_max, 0, sizeof(int) * (MAX_SPELL_LEVEL + 1));
+    switch (cls) {
+    case CLASS_PALADIN:
+    case CLASS_RANGER:
+        slots_max[1] = 1;
+        break;
+    case CLASS_BARBARIAN:
+    case CLASS_ROGUE:
+        slots_max[1] = 2;
+        break;
+    case CLASS_FIGHTER:
+    case CLASS_MONK:
+        slots_max[1] = 3;
+        break;
+    default:
+        slots_max[1] = 4;
+        slots_max[2] = 3;
+        slots_max[3] = 2;
+        break;
+    }
+    for (int lv = 2; lv <= level; lv++) {
+        slots_max[highest_slot_level(cls, lv)]++;
+    }
+}
+
+void check_level_up(Client *c) {
+    if (c->level >= 20) {
+        return;
+    }
+    int next_threshold = get_xp_threshold(c->level + 1);
+    bool leveled = false;
+
+    while (c->xp >= next_threshold && c->level < 20) {
+        c->level++;
+        leveled = true;
+
+        /*The hit die of the class (LORE.md: d12 barbarian ... d6 wizard).*/
+        int die = c->class_id >= 0 && c->class_id < CLASS_COUNT ? CLASSES[c->class_id].hit_die : 8;
+        int hp_gain = rules_roll_dice(1, die) + rules_get_modifier(c->con);
+        if (hp_gain < 1) {
+            hp_gain = 1;
+        }
+        c->max_hp += hp_gain;
+        c->hp = c->max_hp; // Heal to full on level up
+
+        /*Magic/Ki: the slots of the new level (LORE.md, Starting Slots &
+         * Progression Rates).*/
+        class_spell_slots(c->class_id, c->level, c->spell_slots_max);
+
+        //Reset all slots
+        for (int i = 1; i <= MAX_SPELL_LEVEL; i++) {
+            c->spell_slots[i] = c->spell_slots_max[i];
+        }
+
+        c->unspent_stat_points += 3;
+
+        send_text_to_client(c->sock, "[LEVEL] *** YOU HAVE RISEN TO LEVEL %d! ***", c->level);
+        send_combat_event(c->sock, COMBAT_EV_LEVEL_UP, c->entity_id, c->level);
+        plus_event(c, GEV_LEVEL_UP, c->entity_id, c->entity_id, c->level, c->x, c->y); /*DragonGL+*/
+        send_text_to_client(c->sock,
+                            "[LEVEL] Maximum HP increased by %d (Total: %d). "
+                            "Health and spell slots restored.",
+                            hp_gain, c->max_hp);
+        send_text_to_client(
+            c->sock,
+            "[LEVEL] You got 3 stat points! Use 'train <stat>' to assign them (e.g. 'train str') or 'train random'.");
+
+        if (c->class_id == CLASS_BARD || c->class_id == CLASS_CLERIC ||
+            c->class_id == CLASS_DRUID || c->class_id == CLASS_PALADIN ||
+            c->class_id == CLASS_RANGER || c->class_id == CLASS_SORCERER ||
+            c->class_id == CLASS_WARLOCK || c->class_id == CLASS_WIZARD) {
+            c->needs_study = true;
+            send_text_to_client(
+                c->sock,
+                "[MAGIC] Your horizons expand. Head to the Temple to study your books and learn new spells!");
+        } else if (c->class_id == CLASS_BARBARIAN || c->class_id == CLASS_FIGHTER ||
+                   c->class_id == CLASS_MONK || c->class_id == CLASS_ROGUE) {
+            c->needs_study = true;
+            send_text_to_client(
+                c->sock,
+                "[KI] You have learned new techniques. Go to your Guild/Temple to study the manuals and master them!");
+        }
+
+        next_threshold = get_xp_threshold(c->level + 1);
+    }
+
+    if (leveled) {
+        server_log("LEVELUP", "Player %s has reached level %d", c->username, c->level);
+        save_player_data(c);
+    }
+}
+
+/*The functions give_item_by_name and give_starting_gear remain here because
+ * are used by the character creation logic in main_server.c.*/
+
+static int get_item_idx_by_name(const char *name) {
+    for (int i = 0; i < item_database_size; i++) {
+        if (strcasecmp(item_database[i].name, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void give_item_by_name(Client *c, const char *name) {
+    int idx = get_item_idx_by_name(name);
+    if (idx == -1) {
+        return;
+    }
+    if (c->backpack_count >= MAX_BACKPACK) {
+        return;
+    }
+
+    item_instance_new(&c->backpack[c->backpack_count++], idx);
+}
+
+/*An item straight on the first free slot of the belt.*/
+static void give_belt_by_name(Client *c, const char *name) {
+    int idx = get_item_idx_by_name(name);
+    for (int b = 0; idx >= 0 && b < MAX_BELT; b++) {
+        if (c->belt[b].template_idx == -1) {
+            item_instance_new(&c->belt[b], idx);
+            return;
+        }
+    }
+}
+
+void give_starting_gear(Client *c) {
+    switch (c->class_id) {
+    case CLASS_BARBARIAN:
+        give_item_by_name(c, "Greataxe");
+        give_item_by_name(c, "Way of Fury");
+        break;
+    case CLASS_WIZARD:
+        give_item_by_name(c, "Arcane Focus, Staff");
+        give_item_by_name(c, "Book of the Arcane Novice");
+        break;
+    case CLASS_SORCERER:
+        give_item_by_name(c, "Arcane Focus, Staff");
+        give_item_by_name(c, "Awakening of the Arcane Blood");
+        break;
+    case CLASS_WARLOCK:
+        give_item_by_name(c, "Arcane Focus, Staff");
+        give_item_by_name(c, "Initiate's Pact");
+        break;
+    case CLASS_CLERIC:
+        give_item_by_name(c, "Mace");
+        give_item_by_name(c, "Shield");
+        give_item_by_name(c, "Cleric's Missal");
+        break;
+    case CLASS_DRUID:
+        give_item_by_name(c, "Quarterstaff");
+        give_item_by_name(c, "Whispers of the Forest");
+        break;
+    case CLASS_BARD:
+        give_item_by_name(c, "Rapier");
+        give_item_by_name(c, "Ballads of the Caster");
+        break;
+    case CLASS_PALADIN:
+        give_item_by_name(c, "Longsword");
+        give_item_by_name(c, "Shield");
+        give_item_by_name(c, "Chain Mail");
+        give_item_by_name(c, "Vow of the Neophyte");
+        break;
+    case CLASS_RANGER:
+        give_item_by_name(c, "Longbow");
+        give_belt_by_name(c, "Arrows (20)"); /*a bow shoots from the belt*/
+        give_item_by_name(c, "Tracks of Nature");
+        break;
+    case CLASS_ROGUE:
+        give_item_by_name(c, "Shortsword");
+        give_item_by_name(c, "Dagger");
+        give_item_by_name(c, "Cutpurse's Notes");
+        break;
+    case CLASS_FIGHTER:
+        give_item_by_name(c, "Greatsword");
+        give_item_by_name(c, "Chain Mail");
+        give_item_by_name(c, "Recruit's Manual");
+        break;
+    case CLASS_MONK:
+        give_item_by_name(c, "Quarterstaff");
+        give_item_by_name(c, "Scroll of the Lotus");
+        break;
+    default:
+        give_item_by_name(c, "Dagger");
+        break;
+    }
+
+    /*-------------------------------------------------------
+   * Grimoire initialization: assign cantrips (level 0)
+   * and the 1st level spells of your caster class.
+   * Non-spellcasting characters gain an empty grimoire
+   * (known_spells = {0}) and will not be able to use 'cast'.
+   * -------------------------------------------------------*/
+    {
+        /*Non-enchanter classes: empty grimoire (already cleared by calloc)*/
+        static const bool IS_CASTER[CLASS_COUNT] = {
+            [CLASS_BARBARIAN] = true, [CLASS_BARD] = true,    [CLASS_CLERIC] = true,
+            [CLASS_DRUID] = true,     [CLASS_FIGHTER] = true, [CLASS_MONK] = true,
+            [CLASS_PALADIN] = true,   [CLASS_RANGER] = true,  [CLASS_ROGUE] = true,
+            [CLASS_SORCERER] = true,  [CLASS_WARLOCK] = true, [CLASS_WIZARD] = true,
+        };
+        if (IS_CASTER[c->class_id]) {
+            uint32_t cls_bit = (1u << (int)c->class_id);
+            for (int si = 0; si < spell_database_size; si++) {
+                /*Learns cantrip (level 0) and 1st level spells of your class*/
+                if (spell_database[si].level > 1) {
+                    continue;
+                }
+                if (!(spell_database[si].class_mask & cls_bit)) {
+                    continue;
+                }
+                /*Guarded: si may exceed MAX_SPELL_DB_SIZE on huge datasets*/
+                spell_known_set(c, si);
+            }
+        }
+    }
+}

@@ -1,0 +1,537 @@
+#!/usr/bin/env bash
+# Dragon GL - Copyright (C) 2026 Nicola Taibi
+# License: GPL-3.0-or-later
+#
+# quality.sh — the quality checks of CI, runnable locally.
+#
+# Usage: tools/quality.sh <check>... (run tools/quality.sh -h for the list)
+#
+# Every check exits non-zero on a failure. Build trees go to build-quality/
+# (git-ignored); the clang tools must be version 18, the version CI pins
+# (Ubuntu 24.04): another version formats and diagnoses differently.
+
+set -Eeuo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly ROOT
+readonly OUT="$ROOT/build-quality"
+readonly LIMITS="$ROOT/tools/quality_limits.json"
+readonly LLVM_VERSION=18
+JOBS="$(nproc 2>/dev/null || echo 4)"
+
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    C_BOLD=$'\e[1m'; C_DIM=$'\e[2m'; C_RED=$'\e[31m'; C_GREEN=$'\e[32m'; C_BLUE=$'\e[34m'
+    C_RESET=$'\e[0m'
+else
+    C_BOLD=""; C_DIM=""; C_RED=""; C_GREEN=""; C_BLUE=""; C_RESET=""
+fi
+section() { printf '\n%s==> %s%s\n' "$C_BOLD$C_BLUE" "$*" "$C_RESET"; }
+info()    { printf '%s  -> %s%s\n' "$C_DIM" "$*" "$C_RESET"; }
+ok()      { printf '%s  ok:%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+die()     { printf '%serror:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+
+usage() {
+    cat <<EOF
+${C_BOLD}quality.sh${C_RESET} — the quality checks of CI, runnable locally
+
+Usage: tools/quality.sh <check>...
+
+Checks
+  format          clang-format --dry-run: every C file is in the style of .clang-format
+  format-fix      reformat every C file in place
+  tidy            clang-tidy (.clang-tidy) on the main project, the unit
+                  tests, the integration tests and the fuzz targets
+  data            tools/check_data.py: schema, references, canonical form of data/
+  spelling        codespell (.codespellrc) on the game data, the documentation,
+                  the man pages, the sources and the tools
+  deps            tools/check_deps.py: the layers of the source tree (which
+                  module may include which) and no cycle among the headers.
+  metrics         tools/metrics.py: function and file length, coverage, against
+                  the limits of tools/quality_limits.json
+  protocol        tools/gen_protocol.py --check: the files generated from
+                  protocol/messages.json are up to date
+  coverage        unit + integration suites with llvm-cov instrumentation;
+                  report in build-quality/coverage/, fails under the
+                  coverage_line_percent of tools/quality_limits.json
+  tsan            integration suite (in-process and network) under ThreadSanitizer
+  fuzz [SECONDS]  build the libFuzzer targets of tests/fuzz, write their seeds
+                  and run each for SECONDS (default 60); crashes are saved
+                  in build-quality/fuzz/artifacts/
+  bench           tests/integration/tick_bench (Release): the round with 64
+                  characters in a full world, and the autosave, against
+                  tests/bench_limits.json
+  load [SECONDS]  tools/loadtest.py (Release server): 64 TLS clients play for
+                  SECONDS (default 60), then a shutdown under load and a
+                  restart, against the "load" limits of the same file
+  campaign [ROUNDS [SEED]]
+                  tests/integration/campaign_sim (Release): a bot of every
+                  class plays the whole game, in process, for ROUNDS rounds
+                  of the world of SEED (default 150000 rounds, about 8 hours
+                  of play, seed 1), the server stopped and started again
+                  every 20000 rounds (a clean stop and a crash in turn);
+                  fails when a clean restart changes a character or a floor,
+                  or the world breaks an invariant (a floor loses creatures,
+                  the NPC table fills, the swarm clones pass their cap).
+                  The campaign of reference (seed 1, 150000 rounds) fails
+                  too under campaign_conquests_min conquests of
+                  tools/quality_limits.json; another seed only reports
+                  them. The report: how deep each class went, its deaths,
+                  where it stopped
+  play [SECONDS]  tools/playtest.py (Release server): a character of every
+                  class plays down the dungeon for SECONDS (default 300);
+                  fails on a command with no answer, a character stuck, a
+                  closed connection or a server that exits
+  ascii           tools/check_ascii.py: the string literals of the sources and
+                  the game data are ASCII (the HUD font draws nothing else)
+  links           tools/check_links.py: links between the Markdown files, their
+                  #anchors, and the files of the tree they name in backticks
+  links-external  the same, and every http(s) link must answer (network)
+  commands        docs/COMMANDS.md is what `dragongl_server --print-commands`
+                  writes from the table of src/server/cmd_help.c
+  commands-fix    write docs/COMMANDS.md again
+  man             the man pages, as installed, through `mandoc -T lint`: no
+                  warning
+  repro           two copies of the tree at different paths, built with
+                  debug information and installed: every file identical
+  all             format protocol deps tidy data spelling ascii links commands man coverage
+                  metrics tsan repro, then fuzz 30
+
+Options
+  -j N            parallel jobs (default: number of CPUs)
+  -h, --help      this help
+
+Environment
+  CC              compiler for coverage/tsan/fuzz (default: clang; must be clang)
+  NO_COLOR=1      disable colored output
+EOF
+}
+
+# --- Tools ----------------------------------------------------------------------------------
+# The versioned name first (Debian/Ubuntu), then the plain one if it is v18.
+llvm_tool() {
+    local name=$1 cand
+    for cand in "$name-$LLVM_VERSION" "$name"; do
+        if command -v "$cand" >/dev/null 2>&1; then
+            if [[ $cand == "$name" ]] &&
+                ! "$cand" --version 2>/dev/null | grep -q "version $LLVM_VERSION\."; then
+                continue
+            fi
+            echo "$cand"
+            return 0
+        fi
+    done
+    die "$name $LLVM_VERSION not found (apt install clang-tools-$LLVM_VERSION / llvm-$LLVM_VERSION)"
+}
+
+need() { command -v "$1" >/dev/null 2>&1 || die "$1 not found"; }
+
+# Drops the paths that are in the index but no longer in the working tree
+# (a deletion not staged yet).
+existing() {
+    while IFS= read -r f; do
+        [ -e "$ROOT/$f" ] && printf '%s\n' "$f"
+    done
+    return 0
+}
+
+c_sources() {
+    git -C "$ROOT" ls-files --cached --others --exclude-standard '*.c' '*.h' |
+        grep -v '^third_party/' | existing
+}
+
+# configure <dir> <source dir> [cmake args...]
+configure() {
+    local dir=$1 src=$2
+    shift 2
+    local gen=()
+    if command -v ninja >/dev/null 2>&1; then gen=(-G Ninja); fi
+    cmake -S "$src" -B "$dir" "${gen[@]}" -DCMAKE_C_COMPILER="${CC:-clang}" \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "$@" >/dev/null
+    cmake --build "$dir" --parallel "$JOBS" >/dev/null
+}
+
+limit() {
+    python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$LIMITS" "$1"
+}
+
+# --- Checks ---------------------------------------------------------------------------------
+check_format() {
+    section "clang-format ($([[ ${1:-} == fix ]] && echo fix || echo check))"
+    local cf
+    cf="$(llvm_tool clang-format)"
+    cd "$ROOT"
+    if [[ ${1:-} == fix ]]; then
+        c_sources | xargs -r "$cf" -i
+        ok "$(c_sources | wc -l) files formatted"
+    else
+        c_sources | xargs -r "$cf" --dry-run --Werror
+        ok "$(c_sources | wc -l) files in the style of .clang-format"
+    fi
+}
+
+check_tidy() {
+    section "clang-tidy"
+    local rct
+    rct="$(llvm_tool run-clang-tidy)"
+    llvm_tool clang-tidy >/dev/null
+    local d="$OUT/tidy"
+    info "configure main, unit, integration and fuzz trees (compile_commands.json)"
+    configure "$d/main" "$ROOT" -DCMAKE_BUILD_TYPE=Debug
+    configure "$d/unit" "$ROOT/tests" -DCMAKE_BUILD_TYPE=Debug
+    configure "$d/integration" "$ROOT/tests/integration" -DCMAKE_BUILD_TYPE=Debug
+    configure "$d/fuzz" "$ROOT/tests/fuzz"
+    # One clang-tidy process per file (run-clang-tidy): the static analyzer
+    # keeps state across the files of a single process.
+    local -a tidy=("$rct" -quiet -j "$JOBS" -clang-tidy-binary "$(llvm_tool clang-tidy)")
+    "${tidy[@]}" -p "$d/main" "$ROOT/src/(server|client|shared)/.*\.c$"
+    "${tidy[@]}" -p "$d/unit" "$ROOT/tests/[^/]*\.c$"
+    "${tidy[@]}" -p "$d/integration" "$ROOT/tests/integration/.*\.c$"
+    "${tidy[@]}" -p "$d/fuzz" "$ROOT/tests/fuzz/.*\.c$"
+    ok "no clang-tidy finding"
+}
+
+check_data() {
+    section "game data"
+    python3 "$ROOT/tools/check_data.py"
+}
+
+# LORE.md is left out: its spell and item catalogue cuts the texts
+# mid-word ("thi...").
+spelling_files() {
+    git -C "$ROOT" ls-files --cached --others --exclude-standard 'data/*.json' '*.md' \
+        'man/*' 'src/*.c' 'src/*.h' 'include/*.h' 'tests/*.c' 'tests/*.h' 'tests/*.py' \
+        'tools/*.py' 'tools/*.sh' 'protocol/*' 'dragongl.spec' |
+        grep -v -e '^LORE\.md$' -e '_gen\.' | existing
+}
+
+check_spelling() {
+    section "spelling (codespell)"
+    need codespell
+    cd "$ROOT"
+    spelling_files | xargs -r codespell
+    ok "$(spelling_files | wc -l) files without a known misspelling"
+}
+
+check_protocol() {
+    section "generated protocol files"
+    python3 "$ROOT/tools/gen_protocol.py" --check
+}
+
+check_deps() {
+    section "deps"
+    python3 "$ROOT/tools/check_deps.py"
+}
+
+check_metrics() {
+    section "metrics"
+    mkdir -p "$OUT"
+    python3 "$ROOT/tools/metrics.py" --json "$OUT/metrics.json"
+}
+
+check_coverage() {
+    section "coverage (llvm-cov)"
+    local profdata cov
+    profdata="$(llvm_tool llvm-profdata)"
+    cov="$(llvm_tool llvm-cov)"
+    local d="$OUT/coverage" flags="-fprofile-instr-generate -fcoverage-mapping"
+    rm -rf "$d/profiles"
+    mkdir -p "$d/profiles"
+    info "build the unit and integration suites with instrumentation"
+    configure "$d/unit" "$ROOT/tests" -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS="$flags" \
+        -DCMAKE_EXE_LINKER_FLAGS=-fprofile-instr-generate
+    configure "$d/integration" "$ROOT/tests/integration" -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_C_FLAGS="$flags" -DCMAKE_EXE_LINKER_FLAGS=-fprofile-instr-generate
+    info "run both suites (every process writes its own profile)"
+    # %p: one file per process, the network tests start many servers.
+    export LLVM_PROFILE_FILE="$d/profiles/%p-%m.profraw"
+    ctest --test-dir "$d/unit" -j "$JOBS" --output-on-failure >/dev/null
+    ctest --test-dir "$d/integration" -j "$JOBS" --output-on-failure >/dev/null
+    unset LLVM_PROFILE_FILE
+    "$profdata" merge -sparse "$d"/profiles/*.profraw -o "$d/all.profdata"
+    local -a objects=("$d/integration/dragongl_server_it" -object "$d/integration/server_harness")
+    local t
+    for t in "$d"/unit/test_*; do
+        [[ -x $t && -f $t ]] && objects+=(-object "$t")
+    done
+    # Measured: the server and the shared code (the client is covered by
+    # the smoke test, which runs on a GPU-less runner without llvm-cov).
+    local -a filter=(-ignore-filename-regex='(/third_party/|/tests/|/generated/|/src/client/|/include/)')
+    "$cov" report "${objects[@]}" -instr-profile="$d/all.profdata" "${filter[@]}" \
+        >"$d/report.txt"
+    "$cov" show "${objects[@]}" -instr-profile="$d/all.profdata" "${filter[@]}" \
+        -format=html -output-dir="$d/html" >/dev/null
+    "$cov" export "${objects[@]}" -instr-profile="$d/all.profdata" "${filter[@]}" \
+        -summary-only >"$d/export.json"
+    python3 - "$d/export.json" "$d/summary.json" <<'EOF'
+import json, sys
+totals = json.load(open(sys.argv[1]))["data"][0]["totals"]
+summary = {k: round(totals[k]["percent"], 2) for k in ("lines", "functions", "regions", "branches")}
+summary["line_percent"] = summary.pop("lines")
+json.dump(summary, open(sys.argv[2], "w"), indent=2)
+print("  lines %.2f%%  functions %.2f%%  regions %.2f%%  branches %.2f%%" % (
+    summary["line_percent"], summary["functions"], summary["regions"], summary["branches"]))
+EOF
+    info "report: ${d#"$ROOT"/}/report.txt, html: ${d#"$ROOT"/}/html/index.html"
+    local min line
+    min="$(limit coverage_line_percent)"
+    line="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["line_percent"])' \
+        "$d/summary.json")"
+    if python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) >= float(sys.argv[2]) else 1)' \
+        "$line" "$min"; then
+        ok "line coverage $line% >= $min%"
+    else
+        die "line coverage $line% is under the limit $min% (tools/quality_limits.json)"
+    fi
+}
+
+check_tsan() {
+    section "ThreadSanitizer (integration suite)"
+    local d="$OUT/tsan"
+    configure "$d" "$ROOT/tests/integration" -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -O1" \
+        -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread
+    # A report fails the in-process tests through the exit code and the
+    # network tests through the server log (test_server.py).
+    TSAN_OPTIONS="second_deadlock_stack=1 exitcode=66 ${TSAN_OPTIONS:-}" \
+        ctest --test-dir "$d" -j "$JOBS" --output-on-failure
+    ok "no data race reported"
+}
+
+# Release build of the integration tree: the benchmark and the load test
+# measure what a packaged server would do.
+build_release() {
+    configure "$OUT/release" "$ROOT/tests/integration" -DCMAKE_BUILD_TYPE=Release
+}
+
+check_bench() {
+    section "benchmark of the round"
+    build_release
+    local run="$OUT/release/bench-run" attempt
+    # A shared machine (a CI runner) may stall the process for a few hundred
+    # ms; six such rounds of 600 are a p99 over the limit with the code
+    # unchanged (p50 untouched). An over-limit run is measured once more: a
+    # slower round fails both runs.
+    for attempt in 1 2; do
+        rm -rf "$run"
+        mkdir -p "$run"
+        if (cd "$run" && "$OUT/release/tick_bench" "$ROOT/tests/bench_limits.json" 600 \
+            "$OUT/release/bench.json" 2>&1 | grep -v '^\['); then
+            ok "within tests/bench_limits.json (numbers in ${OUT#"$ROOT"/}/release/bench.json)"
+            return
+        fi
+        ((attempt == 1)) && echo "  over the limits: measuring once more (a stalled machine?)"
+    done
+    die "the round is over the limits of tests/bench_limits.json, twice"
+}
+
+check_load() {
+    local seconds=${1:-60}
+    section "load test (64 clients, ${seconds}s)"
+    build_release
+    python3 "$ROOT/tools/loadtest.py" --server "$OUT/release/dragongl_server_it" \
+        --seconds "$seconds" --json "$OUT/release/load.json" ||
+        die "the load test failed"
+    ok "within tests/bench_limits.json (numbers in ${OUT#"$ROOT"/}/release/load.json)"
+}
+
+check_campaign() {
+    local rounds=${1:-150000} seed=${2:-1}
+    section "campaign (a bot of every class, ${rounds} rounds, seed ${seed})"
+    build_release
+    local run="$OUT/release/campaign-run" json="$OUT/release/campaign.json"
+    rm -rf "$run"
+    mkdir -p "$run"
+    local rc=0
+    (cd "$run" && DGL_CAMPAIGN_RESTART=20000 "$OUT/release/campaign_sim" "$rounds" "$seed" \
+        "$json") || rc=$?
+    [ "$rc" -ne 3 ] || die "a clean restart of the server changed a character or a floor"
+    [ "$rc" -ne 4 ] || die "the world broke an invariant (the line 'world:' of the report)"
+    [ "$rc" -le 1 ] || die "campaign_sim failed (exit status $rc)"
+    local got min
+    got="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["conquests"])' "$json")"
+    if [[ $seed == 1 && $rounds == 150000 ]]; then
+        # The campaign of reference: a ratchet, like the coverage. A change
+        # may raise campaign_conquests_min, never lower it.
+        min="$(limit campaign_conquests_min)"
+        ((got >= min)) || die "$got conquests of 12, under the limit $min (tools/quality_limits.json)"
+        ok "$got conquests of 12 (at least $min), the world whole across restarts (${json#"$ROOT"/})"
+    else
+        ok "$got conquests of 12, the world whole across restarts (${json#"$ROOT"/})"
+    fi
+}
+
+check_play() {
+    local seconds=${1:-300}
+    section "playtest (a character of every class, ${seconds}s)"
+    build_release
+    PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT/tools/playtest.py" \
+        --server "$OUT/release/dragongl_server_it" --seconds "$seconds" ||
+        die "the playtest found a problem"
+    ok "no character stuck, every command answered"
+}
+
+check_fuzz() {
+    local seconds=${1:-60}
+    section "fuzzing (libFuzzer, ${seconds}s per target)"
+    local d="$OUT/fuzz" t
+    configure "$d/build" "$ROOT/tests/fuzz"
+    mkdir -p "$d/seeds" "$d/corpus" "$d/artifacts" "$d/logs"
+    # Saves written by the targets go to a private directory: tmpfs if any.
+    local tmp="${TMPDIR:-/tmp}"
+    [[ -d /dev/shm && -w /dev/shm ]] && tmp=/dev/shm
+    for t in fuzz_wire fuzz_persist fuzz_text_cmd fuzz_item_effects; do
+        rm -rf "${d:?}/seeds/$t"
+        DGL_FUZZ_SEEDS="$d/seeds/$t" TMPDIR="$tmp" "$d/build/$t" >/dev/null 2>&1 ||
+            die "$t: cannot write its seeds"
+        mkdir -p "$d/corpus/$t"
+        info "$t: $(find "$d/seeds/$t" -type f | wc -l) seeds, corpus ${d#"$ROOT"/}/corpus/$t"
+        if ! TMPDIR="$tmp" "$d/build/$t" -max_total_time="$seconds" -max_len=8192 -timeout=10 \
+            -rss_limit_mb=4096 -print_final_stats=1 -artifact_prefix="$d/artifacts/$t-" \
+            "$d/corpus/$t" "$d/seeds/$t" >"$d/logs/$t.log" 2>&1; then
+            tail -n 60 "$d/logs/$t.log" >&2
+            die "$t: crash, artifact in ${d#"$ROOT"/}/artifacts/ (replay: $d/build/$t <file>)"
+        fi
+        ok "$t: $(sed -n 's/^stat::number_of_executed_units: *//p' "$d/logs/$t.log") runs"
+    done
+}
+
+# Links of the documentation; the checker is tested first.
+check_links() {
+    section "links of the documentation${1:+ (with the external ones)}"
+    python3 "$ROOT/tools/test_check_links.py" >/dev/null 2>&1 ||
+        { python3 "$ROOT/tools/test_check_links.py"; die "check_links.py fails its own tests"; }
+    python3 "$ROOT/tools/check_links.py" ${1:+"$1"}
+}
+
+# docs/COMMANDS.md against the command table of the server.
+check_commands() {
+    section "command reference ($([[ ${1:-} == fix ]] && echo write || echo check))"
+    local d="$OUT/commands"
+    configure "$d" "$ROOT" -DCMAKE_BUILD_TYPE=Release -DDRAGONGL_BUILD_CLIENT=OFF
+    if [[ ${1:-} == fix ]]; then
+        "$d/dragongl_server" --print-commands >"$ROOT/docs/COMMANDS.md"
+        ok "docs/COMMANDS.md written"
+    else
+        "$d/dragongl_server" --print-commands | diff -u "$ROOT/docs/COMMANDS.md" - ||
+            die "docs/COMMANDS.md is not what the server prints: tools/quality.sh commands-fix"
+        ok "docs/COMMANDS.md matches the command table"
+    fi
+}
+
+# The man pages after the substitution of @VARIABLES@, as they are installed.
+check_man() {
+    section "man pages (mandoc -T lint)"
+    need mandoc
+    local d="$OUT/man" page bad=0 n=0
+    rm -rf "$d"
+    cmake -S "$ROOT" -B "$d" -DCMAKE_C_COMPILER="${CC:-clang}" >/dev/null
+    for page in "$d"/man/*.1; do
+        n=$((n + 1))
+        mandoc -T lint -W warning "$page" || bad=1
+    done
+    ((n > 0)) || die "no man page was generated"
+    ((bad == 0)) || die "mandoc reports the lines above"
+    ok "$n man pages without a warning"
+}
+
+# The same sources at two paths give the same installed files. With debug
+# information, where the path of the tree would show first.
+check_repro() {
+    section "reproducible build"
+    local d="$OUT/repro" copy
+    rm -rf "$d"
+    mkdir -p "$d/a/src" "$d/b/another/place/src"
+    for copy in "$d/a/src" "$d/b/another/place/src"; do
+        (cd "$ROOT" && git ls-files -z --cached --others --exclude-standard \
+            ':!readme_assets' | while IFS= read -r -d '' f; do
+            [ -e "$f" ] && printf '%s\0' "$f"
+        done | tar --null -T - -cf -) | tar -xf - -C "$copy"
+        cmake -S "$copy" -B "$copy/out" -DCMAKE_C_COMPILER="${CC:-clang}" \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr >/dev/null
+        cmake --build "$copy/out" --parallel "$JOBS" >/dev/null
+        DESTDIR="$copy/stage" cmake --install "$copy/out" >/dev/null
+        (cd "$copy/stage" && find . -type f -print0 | sort -z | xargs -0 sha256sum) >"$copy.sha256"
+    done
+    diff "$d/a/src.sha256" "$d/b/another/place/src.sha256" ||
+        die "the files above differ between two builds of the same sources"
+    if grep -rlF "$d" "$d/a/src/stage" >/dev/null 2>&1; then
+        grep -rlF "$d" "$d/a/src/stage" >&2
+        die "the files above contain the path of the build"
+    fi
+    ok "$(wc -l <"$d/a/src.sha256") installed files identical, none names its build directory"
+}
+
+# --- Main -----------------------------------------------------------------------------------
+main() {
+    local -a checks=()
+    while (($#)); do
+        case $1 in
+        -h | --help) usage; exit 0 ;;
+        -j) [[ $# -ge 2 ]] || die "-j needs a number"; JOBS=$2; shift ;;
+        -j*) JOBS=${1#-j} ;;
+        fuzz)
+            if [[ ${2:-} =~ ^[0-9]+$ ]]; then checks+=("fuzz:$2"); shift; else checks+=(fuzz:60); fi
+            ;;
+        load)
+            if [[ ${2:-} =~ ^[0-9]+$ ]]; then checks+=("load:$2"); shift; else checks+=(load:60); fi
+            ;;
+        play)
+            if [[ ${2:-} =~ ^[0-9]+$ ]]; then checks+=("play:$2"); shift; else checks+=(play:300); fi
+            ;;
+        campaign)
+            if [[ ${2:-} =~ ^[0-9]+$ && ${3:-} =~ ^[0-9]+$ ]]; then
+                checks+=("campaign:$2:$3")
+                shift 2
+            elif [[ ${2:-} =~ ^[0-9]+$ ]]; then
+                checks+=("campaign:$2:1")
+                shift
+            else
+                checks+=(campaign:150000:1)
+            fi
+            ;;
+        all) checks+=(format protocol deps tidy data spelling ascii links commands man coverage metrics tsan repro fuzz:30) ;;
+        format | format-fix | tidy | data | deps | spelling | metrics | protocol | coverage | tsan | bench | \
+            commands | commands-fix | man | repro | links | links-external | ascii)
+            checks+=("$1")
+            ;;
+        *) usage >&2; die "unknown check '$1'" ;;
+        esac
+        shift
+    done
+    ((${#checks[@]})) || { usage; exit 2; }
+    need cmake
+    need python3
+    local c
+    for c in "${checks[@]}"; do
+        case $c in
+        format) check_format ;;
+        format-fix) check_format fix ;;
+        tidy) check_tidy ;;
+        data) check_data ;;
+        spelling) check_spelling ;;
+        deps) check_deps ;;
+        metrics) check_metrics ;;
+        protocol) check_protocol ;;
+        coverage) check_coverage ;;
+        tsan) check_tsan ;;
+        bench) check_bench ;;
+        links) check_links ;;
+        ascii) section "ASCII text" && python3 "$ROOT/tools/check_ascii.py" ;;
+        links-external) check_links --external ;;
+        commands) check_commands ;;
+        commands-fix) check_commands fix ;;
+        man) check_man ;;
+        repro) check_repro ;;
+        load:*) check_load "${c#load:}" ;;
+        play:*) check_play "${c#play:}" ;;
+        campaign:*)
+            c="${c#campaign:}"
+            check_campaign "${c%%:*}" "${c#*:}"
+            ;;
+        fuzz:*) check_fuzz "${c#fuzz:}" ;;
+        esac
+    done
+    printf '\n%squality.sh: %s passed%s\n' "$C_GREEN$C_BOLD" "${checks[*]}" "$C_RESET"
+}
+
+main "$@"

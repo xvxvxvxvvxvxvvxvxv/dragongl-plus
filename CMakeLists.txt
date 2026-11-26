@@ -1,3 +1,6 @@
+# Dragon GL - Copyright (C) 2026 Nicola Taibi
+# DragonGL+ - fork of Dragon GL
+# SPDX-License-Identifier: GPL-3.0-or-later
 cmake_minimum_required(VERSION 3.16)
 # --- C compiler selection (L4) ----------------------------------------
 # The compiler is a CHOICE, not a force: -DRAGONGL_USE_CLANG=ON (default)
@@ -11,121 +14,110 @@ if(DRAGONGL_USE_CLANG AND NOT DEFINED CMAKE_C_COMPILER AND NOT DEFINED ENV{CC}
         set(CMAKE_C_COMPILER clang)
     endif()
 endif()
-project(DragonGL VERSION 2026.10.27.01 LANGUAGES C)
-
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS OFF)
-
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/DragonGL.cmake")
+project(DragonGL VERSION ${DRAGONGL_VERSION} LANGUAGES C)
+if(WIN32)
+    # -z relro/now and PIE are ELF options
+    set(DRAGONGL_HARDENING OFF CACHE BOOL "Add hardening flags (off for distribution builds)" FORCE)
 endif()
 
-# --- Options ------------------------------------------------------------
-option(DRAGONGL_BUILD_CLIENT "Build the graphical client" ON)
-option(DRAGONGL_BUILD_SERVER "Build the game server" ON)
+# What to build. A headless server host needs neither Vulkan headers nor
+# GLFW: -DDRAGONGL_BUILD_CLIENT=OFF.
+option(DRAGONGL_BUILD_SERVER "Build the game server (dragongl_server)" ON)
+option(DRAGONGL_BUILD_CLIENT "Build the graphical client (dragongl_client)" ON)
 option(DRAGONGL_SYSTEM_GLFW "Use the system GLFW (pkg-config) instead of third_party/glfw" OFF)
-option(DRAGONGL_PORTABLE "Self-contained binaries (static runtime on Windows, embedded assets)" OFF)
+option(DRAGONGL_PORTABLE "Self-contained binaries (static libraries, embedded assets)" OFF)
+option(DRAGONGL_INSTALL_SYSTEMD_UNIT "Install the systemd unit of the server" ON)
+set(DRAGONGL_SYSTEMD_UNITDIR "lib/systemd/system" CACHE PATH
+    "Where the systemd unit goes (relative to the prefix, or absolute)")
+# The firewalld service of the server (port 8080/tcp): installed only when
+# a directory is given, since firewalld reads /usr/lib/firewalld/services
+# only (the spec passes %{_prefix}/lib/firewalld/services).
+set(DRAGONGL_FIREWALLD_SERVICEDIR "" CACHE PATH
+    "Where the firewalld service of the server goes (empty: not installed)")
+if(NOT DRAGONGL_BUILD_SERVER AND NOT DRAGONGL_BUILD_CLIENT)
+    message(FATAL_ERROR "DRAGONGL_BUILD_SERVER and DRAGONGL_BUILD_CLIENT are both OFF: nothing to build")
+endif()
+
+dragongl_compile_settings()
+include(GNUInstallDirs)
+set(DRAGONGL_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
+dragongl_generate_config("${DRAGONGL_GENERATED_DIR}")
+message(STATUS "Dragon GL ${DRAGONGL_VERSION} (server: ${DRAGONGL_BUILD_SERVER}, client: ${DRAGONGL_BUILD_CLIENT})")
 
 if(WIN32)
-    set(DRAGONGL_WINDOWS ON)
-endif()
-
-# --- Global definitions & warnings --------------------------------------
-if(NOT WIN32)
-    # strcasestr & friends are GNU extensions on glibc.
-    add_compile_definitions(_GNU_SOURCE _DEFAULT_SOURCE)
-endif()
-
-if(MSVC)
-    add_compile_options(/W4)
-else()
-    add_compile_options(-Wall -Wextra -Wformat -Wformat-security
-                        -Wno-unused-parameter -Wno-missing-field-initializers)
-    if(NOT WIN32)
-        set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-        add_compile_options(-fPIE -fstack-protector-strong)
-        add_link_options(-pie -Wl,-z,relro,-z,now)
-    endif()
-    if(CMAKE_BUILD_TYPE STREQUAL "Release")
-        add_compile_options(-O2)
-        if(NOT WIN32)
-            add_compile_options(-D_FORTIFY_SOURCE=2)
-        endif()
-    elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        add_compile_options(-O0 -g)
-    endif()
-endif()
-
-if(WIN32)
-    # The code base speaks POSIX: on Windows every translation unit gets the
-    # compatibility layer first (sockets, mkdir/fsync/rename, rand...).
-    # (applied per target below, so third-party libraries such as GLFW
-    # are compiled exactly as upstream intends)
+    # The code base speaks POSIX: on Windows every translation unit of the
+    # game gets the compatibility layer first (sockets, files, locks...),
+    # applied per target so third-party libraries build as their authors
+    # intend. src/shared/compat_win32 stands in for the POSIX headers
+    # Windows lacks; platform_win32.h maps the calls (wepoll for epoll).
     set(DRAGONGL_FORCE_INCLUDE -include ${CMAKE_CURRENT_SOURCE_DIR}/src/shared/platform.h)
+    include_directories(src/shared/compat_win32 third_party/wepoll)
+    set(DRAGONGL_WIN32_SRCS src/shared/platform_win32.c third_party/wepoll/wepoll.c)
+    # These call Winsock and the CRT directly: no POSIX macros.
+    set_source_files_properties(src/shared/platform.c src/shared/platform_win32.c
+        third_party/miniaudio/miniaudio.c third_party/volk/volk.c
+        PROPERTIES COMPILE_DEFINITIONS DRAGONGL_NO_POSIX_SHIM)
+    set_source_files_properties(third_party/wepoll/wepoll.c PROPERTIES
+        COMPILE_DEFINITIONS "DRAGONGL_NO_POSIX_SHIM;DRAGONGL_WEPOLL_SOURCE" COMPILE_OPTIONS "-w")
     add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0601 _USE_MATH_DEFINES)
     if(DRAGONGL_PORTABLE OR MINGW)
         add_link_options(-static -static-libgcc)
     endif()
 endif()
+# Static OpenSSL and libsodium of the portable packages, built by
+# tools/build_deps.sh into this prefix (lib/, include/, lib/pkgconfig/).
+set(DRAGONGL_DEPS_PREFIX "" CACHE PATH "Prefix of the static OpenSSL and libsodium (tools/build_deps.sh)")
+if(DRAGONGL_DEPS_PREFIX)
+    list(APPEND CMAKE_FIND_ROOT_PATH "${DRAGONGL_DEPS_PREFIX}")
+    set(OPENSSL_ROOT_DIR "${DRAGONGL_DEPS_PREFIX}")
+    set(ENV{PKG_CONFIG_LIBDIR} "${DRAGONGL_DEPS_PREFIX}/lib/pkgconfig")
+    set(ENV{PKG_CONFIG_PATH} "")
+endif()
+if(DRAGONGL_PORTABLE)
+    set(OPENSSL_USE_STATIC_LIBS ON)
+endif()
 
+# --- Dependencies -----------------------------------------------------------------
 find_package(Threads REQUIRED)
-set(COMMON_LIBS Threads::Threads)
-if(NOT WIN32)
+find_package(PkgConfig REQUIRED)
+# OpenSSL 3: TLS 1.3 between client and server (include/tls_common.h)
+find_package(OpenSSL 3.0 REQUIRED)
+if(DRAGONGL_BUILD_SERVER)
+    # libsodium: Argon2id password hashing and constant-time comparisons
+    # (with DRAGONGL_DEPS_PREFIX only the static library is there)
+    pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
+    if(WIN32 AND DRAGONGL_DEPS_PREFIX)
+        add_compile_definitions(SODIUM_STATIC) # no dllimport in sodium.h
+    endif()
+endif()
+
+include_directories(include src/shared "${DRAGONGL_GENERATED_DIR}")
+
+# --- Targets ----------------------------------------------------------------------
+set(COMMON_LIBS Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+if(WIN32)
+    list(APPEND COMMON_LIBS ws2_32 crypt32 gdi32 bcrypt advapi32 shell32 user32)
+else()
     list(APPEND COMMON_LIBS m)
 endif()
-if(WIN32)
-    list(APPEND COMMON_LIBS ws2_32 bcrypt shell32)
-endif()
 
-include_directories(include src/shared)
+# Source lists: cmake/DragonGL.cmake, plus the portability layer of DragonGL+
+list(APPEND DRAGONGL_SHARED_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/src/shared/platform.c")
+list(APPEND DRAGONGL_CLIENT_SHARED_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/src/shared/platform.c")
 
-set(SHARED_SRCS
-    src/shared/map.c
-    src/shared/game.c
-    src/shared/net.c
-    src/shared/rules.c
-    src/shared/cJSON.c
-    src/shared/data_loader.c
-    src/shared/platform.c
-)
-set_source_files_properties(src/shared/cJSON.c PROPERTIES COMPILE_FLAGS "-Wno-keyword-macro")
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-    set_source_files_properties(src/shared/cJSON.c PROPERTIES COMPILE_FLAGS "")
-endif()
-
-# --- 1. Server ------------------------------------------------------------
 if(DRAGONGL_BUILD_SERVER)
-    set(SERVER_SRCS
-        src/server/main_server.c
-        src/server/server_net.c
-        src/server/ai.c
-        src/server/aoe.c
-        src/server/combat_log.c
-        src/server/pathfinding.c
-        src/server/server_combat.c
-        src/server/server_spawn.c
-        src/server/server_world.c
-        src/server/server_commands.c
-        src/server/server_ui_sync.c
-        src/server/spell_router.c
-        src/server/tombstone.c
-    )
-    if(WIN32)
-        list(APPEND SERVER_SRCS third_party/wepoll/wepoll.c)
-    endif()
-    add_executable(dragongl_server ${SERVER_SRCS} ${SHARED_SRCS})
+    set(DRAGONGL_SERVER_EXTRA ${DRAGONGL_WIN32_SRCS})
+    add_executable(dragongl_server ${DRAGONGL_SERVER_SRCS} ${DRAGONGL_SHARED_SRCS} ${DRAGONGL_SERVER_EXTRA})
     target_include_directories(dragongl_server PRIVATE src/server third_party/wepoll)
-    target_link_libraries(dragongl_server ${COMMON_LIBS})
+    target_link_libraries(dragongl_server ${COMMON_LIBS} PkgConfig::SODIUM ${DRAGONGL_CJSON_LIBS})
     target_compile_options(dragongl_server PRIVATE ${DRAGONGL_FORCE_INCLUDE})
 endif()
 
-# --- 2. Client ------------------------------------------------------------
 if(DRAGONGL_BUILD_CLIENT)
-    # GLFW: bundled static build (no runtime dependency; X11 + Wayland are
-    # loaded dynamically by GLFW itself) unless the system one is requested.
+    # GLFW: bundled static build (no runtime dependency; X11 is loaded
+    # dynamically by GLFW itself) unless the system one is requested.
     if(DRAGONGL_SYSTEM_GLFW)
-        find_package(PkgConfig REQUIRED)
         pkg_check_modules(GLFW REQUIRED glfw3)
         set(GLFW_TARGET ${GLFW_LIBRARIES})
         set(GLFW_INC ${GLFW_INCLUDE_DIRS})
@@ -143,11 +135,9 @@ if(DRAGONGL_BUILD_CLIENT)
     endif()
 
     # Embedded assets: fonts and SPIR-V shaders become C arrays.
-    set(GEN_DIR ${CMAKE_BINARY_DIR}/generated)
-    file(MAKE_DIRECTORY ${GEN_DIR})
     set(EMBED_SRCS "")
     function(dragongl_embed in name)
-        set(out ${GEN_DIR}/${name}.c)
+        set(out ${DRAGONGL_GENERATED_DIR}/${name}.c)
         add_custom_command(
             OUTPUT ${out}
             COMMAND ${CMAKE_COMMAND} -DIN=${in} -DOUT=${out} -DNAME=${name}
@@ -172,7 +162,7 @@ if(DRAGONGL_BUILD_CLIENT)
         set(src ${CMAKE_CURRENT_SOURCE_DIR}/shaders/${sh})
         set(prebuilt ${CMAKE_CURRENT_SOURCE_DIR}/shaders/spv/${sh}.spv)
         if(GLSLC_EXECUTABLE)
-            set(spv ${GEN_DIR}/${sh}.spv)
+            set(spv ${DRAGONGL_GENERATED_DIR}/${sh}.spv)
             add_custom_command(
                 OUTPUT ${spv}
                 COMMAND ${GLSLC_EXECUTABLE} -O ${src} -o ${spv}
@@ -208,6 +198,11 @@ if(DRAGONGL_BUILD_CLIENT)
         src/client/net_thread.c
         src/client/client_state.c
         src/client/client_tome.c
+        src/client/client_tls.c
+        src/client/known_servers.c
+        src/shared/map.c
+        src/shared/map_city.c
+        src/shared/map_traps.c
         third_party/volk/volk.c
         third_party/miniaudio/miniaudio.c
     )
@@ -219,7 +214,8 @@ if(DRAGONGL_BUILD_CLIENT)
         enable_language(RC)
         list(APPEND CLIENT_SRCS res/dragongl.rc)
     endif()
-    add_executable(dragongl_client ${CLIENT_SRCS} ${SHARED_SRCS} ${EMBED_SRCS})
+    add_executable(dragongl_client ${CLIENT_SRCS} ${DRAGONGL_CLIENT_SHARED_SRCS} ${EMBED_SRCS}
+        ${DRAGONGL_WIN32_SRCS})
     target_include_directories(dragongl_client PRIVATE
         src/client
         ${GLFW_INC}
@@ -227,6 +223,11 @@ if(DRAGONGL_BUILD_CLIENT)
         third_party/volk
         third_party/vulkan
         third_party/miniaudio)
+    # The client keeps its own warning set: upstream's -Wconversion /
+    # -Wshadow / -Wpedantic policy applies to the server and shared code.
+    target_compile_options(dragongl_client PRIVATE ${DRAGONGL_FORCE_INCLUDE}
+        -Wno-conversion -Wno-sign-conversion -Wno-shadow -Wno-pedantic
+        -Wno-unused-parameter -Wno-missing-field-initializers)
     # volk loads libvulkan / vulkan-1.dll at run time: no link dependency.
     target_compile_definitions(dragongl_client PRIVATE VK_NO_PROTOTYPES GLFW_INCLUDE_NONE
         # Only raw playback is used: the synthesizer generates every sound.
@@ -236,7 +237,6 @@ if(DRAGONGL_BUILD_CLIENT)
         target_compile_definitions(dragongl_client PRIVATE VK_USE_PLATFORM_WIN32_KHR)
     endif()
     target_link_libraries(dragongl_client ${GLFW_TARGET} ${COMMON_LIBS})
-    target_compile_options(dragongl_client PRIVATE ${DRAGONGL_FORCE_INCLUDE})
     if(NOT WIN32)
         target_link_libraries(dragongl_client ${CMAKE_DL_LIBS})
     else()
@@ -246,56 +246,113 @@ if(DRAGONGL_BUILD_CLIENT)
     endif()
 endif()
 
-# --- Installation ---------------------------------------------------------
-include(GNUInstallDirs)
+# --- Installed paths, substituted into the man pages and the systemd unit ----------
+set(DRAGONGL_BINDIR "${CMAKE_INSTALL_FULL_BINDIR}")
+set(DRAGONGL_SYSCONFDIR "${CMAKE_INSTALL_FULL_SYSCONFDIR}")
+set(DRAGONGL_PKGDATADIR "${CMAKE_INSTALL_FULL_DATADIR}/dragongl")
 
+# --- Man pages: version and date come from dragongl.spec -------------------------
+function(dragongl_man_page name)
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/man/${name}.in"
+                   "${CMAKE_BINARY_DIR}/man/${name}" @ONLY)
+    install(FILES "${CMAKE_BINARY_DIR}/man/${name}" DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+endfunction()
+
+# --- Installation -------------------------------------------------------------------
+# Every installed file has one owner in dragongl.spec:
+#   dragongl         client, its launcher, man pages, shaders, menu entry and icon
+#   dragongl-server  server, launchers, man pages, systemd unit and config
+#   dragongl-data    game data (JSON)
+#   dragongl-tools   DM and balance tools, Data Studio
 if(DRAGONGL_BUILD_SERVER)
     install(TARGETS dragongl_server RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(PROGRAMS dragongl-server dragongl-reset-world DESTINATION ${CMAKE_INSTALL_BINDIR})
+    dragongl_man_page(dragongl_server.1)
+    dragongl_man_page(dragongl-server.1)
+    dragongl_man_page(dragongl-reset-world.1)
+
+    # Game data (read-only JSON). The server writes only to its state
+    # directory, never here.
+    install(FILES data/bestiary.json data/items.json data/spells.json
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/dragongl/data)
+
+    # DM and balance tools (dm_pdf runs generate_pdf_map.py from here).
+    install(PROGRAMS tools/analyze_balance.py tools/analyze_log.py tools/generate_pdf_map.py
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/dragongl/tools)
+    # The three tools are commands too: dragongl-analyze-balance,
+    # dragongl-analyze-log and dragongl-generate-pdf-map, relative symbolic
+    # links to the scripts, each with its man page.
+    file(RELATIVE_PATH DRAGONGL_TOOLS_FROM_BINDIR "${CMAKE_INSTALL_FULL_BINDIR}"
+         "${CMAKE_INSTALL_FULL_DATADIR}/dragongl/tools")
+    foreach(pair "dragongl-analyze-balance:analyze_balance.py"
+                 "dragongl-analyze-log:analyze_log.py"
+                 "dragongl-generate-pdf-map:generate_pdf_map.py")
+        string(REPLACE ":" ";" pair "${pair}")
+        list(GET pair 0 cmd)
+        list(GET pair 1 script)
+        install(CODE "file(MAKE_DIRECTORY \"\$ENV{DESTDIR}${CMAKE_INSTALL_FULL_BINDIR}\")
+            file(CREATE_LINK \"${DRAGONGL_TOOLS_FROM_BINDIR}/${script}\"
+                 \"\$ENV{DESTDIR}${CMAKE_INSTALL_FULL_BINDIR}/${cmd}\" SYMBOLIC)")
+        dragongl_man_page(${cmd}.1)
+    endforeach()
+    # Data Studio (self-contained HTML workbenches): the pages load the
+    # datasets through ../../data/*.json, i.e. <datadir>/dragongl/data.
+    install(PROGRAMS tools/web/build.py
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/dragongl/tools/web)
+    install(FILES
+        tools/web/menu.html
+        tools/web/bestiary.html
+        tools/web/items.html
+        tools/web/spells.html
+        tools/web/README.md
+        tools/web/_core.js
+        tools/web/_design.css
+        tools/web/_editor-shell.html
+        tools/web/_mod-bestiary.js
+        tools/web/_mod-items.js
+        tools/web/_mod-spells.js
+        tools/web/_menu.html
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/dragongl/tools/web)
+
+    if(DRAGONGL_INSTALL_SYSTEMD_UNIT)
+        configure_file(packaging/dragongl-server.service.in
+                       "${CMAKE_BINARY_DIR}/packaging/dragongl-server.service" @ONLY)
+        install(FILES "${CMAKE_BINARY_DIR}/packaging/dragongl-server.service"
+                DESTINATION ${DRAGONGL_SYSTEMD_UNITDIR})
+        # Options of the service, never replaced by an update (the spec marks
+        # it %config(noreplace)). It holds no secret: the passwords are
+        # credentials of the unit, files the administrator creates.
+        install(FILES packaging/dragongl-server.conf
+                DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/dragongl)
+    endif()
+    if(DRAGONGL_FIREWALLD_SERVICEDIR)
+        install(FILES packaging/dragongl-server.firewalld.xml
+                DESTINATION ${DRAGONGL_FIREWALLD_SERVICEDIR}
+                RENAME dragongl-server.xml)
+    endif()
 endif()
+
 if(DRAGONGL_BUILD_CLIENT)
     install(TARGETS dragongl_client RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-endif()
-if(NOT WIN32)
-    install(PROGRAMS dragongl-server dragongl-client dragongl_reset_world
-            DESTINATION ${CMAKE_INSTALL_BINDIR})
-endif()
+    install(PROGRAMS dragongl-client DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-# Game data (read-only JSON datasets). The mutable world state lives in
-# the user's data/state dir, never in the package.
-install(FILES data/bestiary.json data/items.json data/spells.json
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/dragongl/data)
-
-if(NOT WIN32)
-    set(MAN_PAGES
-        man/dragongl_server.1
-        man/dragongl_client.1
-        man/dragongl-server.1
-        man/dragongl-client.1
-        man/dragongl_reset_world.1
-        man/analyze_balance.1
-        man/generate_pdf_map.1
-    )
-    install(FILES ${MAN_PAGES} DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+    # Desktop integration (freedesktop.org): menu entry, icon and AppStream
+    # metadata, all named by the application id. The release in the
+    # metadata is the version of dragongl.spec.
+    set(DRAGONGL_APP_ID io.github.nicolataibi.dragongl)
+    install(FILES packaging/${DRAGONGL_APP_ID}.desktop
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES packaging/${DRAGONGL_APP_ID}.svg
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+    configure_file(packaging/${DRAGONGL_APP_ID}.metainfo.xml.in
+                   "${CMAKE_BINARY_DIR}/packaging/${DRAGONGL_APP_ID}.metainfo.xml" @ONLY)
+    install(FILES "${CMAKE_BINARY_DIR}/packaging/${DRAGONGL_APP_ID}.metainfo.xml"
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+    dragongl_man_page(dragongl_client.1)
+    dragongl_man_page(dragongl-client.1)
 endif()
 
-install(PROGRAMS tools/analyze_balance.py tools/generate_pdf_map.py
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/dragongl/tools)
-
-install(PROGRAMS tools/web/build.py
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/dragongl/tools/web)
-install(FILES
-    tools/web/menu.html
-    tools/web/bestiary.html
-    tools/web/items.html
-    tools/web/spells.html
-    tools/web/README.md
-    tools/web/_core.js
-    tools/web/_design.css
-    tools/web/_editor-shell.html
-    tools/web/_mod-bestiary.js
-    tools/web/_mod-items.js
-    tools/web/_mod-spells.js
-    tools/web/_menu.html
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/dragongl/tools/web)
-install(FILES third_party/fonts/OFL-Cinzel.txt third_party/fonts/OFL-AlegreyaSans.txt
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/dragongl/fonts)
+if(DRAGONGL_BUILD_CLIENT)
+    install(FILES third_party/fonts/OFL-Cinzel.txt third_party/fonts/OFL-AlegreyaSans.txt
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/dragongl/fonts)
+endif()

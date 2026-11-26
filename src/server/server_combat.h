@@ -23,12 +23,12 @@
  * Contains declarations of used combat functions
  * across the other modules (ai.c, aoe.c, main_server.c).
  *
- * Implementation: src/server/main_server.c (to be migrated to server_combat.c)*/
+ * Implementation: src/server/server_combat.c*/
 #ifndef SERVER_COMBAT_H
 #define SERVER_COMBAT_H
 
 #include <stdbool.h>
-#include "../../include/net.h"
+#include "net.h"
 #include "server_entities.h"
 
 /**
@@ -36,25 +36,52 @@
  * @c: Pointer to the attacking client.
  * @t: Pointer to the target NPC.
  * @npcs: Array of all NPCs (for secondary AOEs).*/
-void perform_attack(Client *c, NPC *t, NPC *npcs);
+void perform_attack(Client *c, NPC *t, Game *game);
+
+/*A character who leaves the game within COMBAT_LINGER_MS of a blow given
+ * or a wound taken stays in the world that long (LORE.md, Leaving in a
+ * Fight): the monsters go on fighting him.*/
+#define COMBAT_LINGER_MS 10000
+bool client_in_combat(const Client *c, long long now_ms);
+/*The connection of the character is gone: true if he stays in the world
+ * (a player, not a DM, in a fight), without a socket, until
+ * linger_until_ms; false if he leaves at once.*/
+bool client_linger(Client *c, long long now_ms);
+/*True when a character who stayed after a fight must leave now.*/
+bool client_linger_over(const Client *c, long long now_ms);
+
+/*An attack or a hostile spell reveals an invisible character: the
+ * condition ends (told to the character).*/
+void client_reveal(Client *c);
+
+/*A shot of the ranged weapon in the player's hands at a creature in range
+ * (the 'shoot' command): the attack of perform_attack, without the
+ * disadvantage of a shot at a neighbour.*/
+void perform_ranged_attack(Client *c, NPC *t, Game *game);
+
+/*True if the player is charmed by that creature: he cannot attack it.*/
+bool client_charmed_by(const Client *c, const NPC *n);
+
+/*Rusty -1, Normal 0, Fine +1, Masterwork +2: to hit and to damage for a
+ * weapon, to the armour class for armour and shields.*/
+int item_quality_bonus(const ItemInstance *it);
+
+/*False (after telling the player) when a condition takes his actions:
+ * paralyzed, stunned, unconscious, petrified, frozen, incapacitated.*/
+bool client_can_act(Client *c);
+
+/*An NPC dies: it leaves the map and the floor caches, its killer c (and
+ * c's party on the floor) gets the XP, the victory line ("falls to your
+ * <by>", or the melee line when by is NULL), the event progress and the
+ * loot; a boss ends its fight. c may be NULL (no one to credit). Returns
+ * the XP each member received.*/
+int npc_killed(Game *game, Client *c, NPC *t, const char *by);
 
 /**
  * perform_attack_npc - Performs an NPC attack on a player.
  * @n: Pointer to the attacking NPC.
  * @c: Pointer to the target client.
  * @npcs: Array of all NPCs.*/
-void perform_attack_npc(NPC *n, Client *c, NPC *npcs);
-
-/**
- * send_text_to_client - Send a text message to a client.
- * @sock: Socket of the recipient client.
- * @fmt: Printf format of the message.*/
-void send_text_to_client(int sock, const char *fmt, ...);
-
-/**
- * broadcast_spell_vfx - Broadcast VFX spell to all clients on the plan.*/
-void broadcast_spell_vfx(int sx, int sy, int tx, int ty,
-                          int vfx_type, float r, float g, float b,
-                          int floor_id);
+void perform_attack_npc(NPC *n, Client *c, Game *game);
 
 #endif /* SERVER_COMBAT_H */

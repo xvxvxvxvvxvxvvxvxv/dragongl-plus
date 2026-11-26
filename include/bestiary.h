@@ -24,39 +24,49 @@
 #include "rules.h"
 
 typedef struct {
-    const char* name;
+    const char *name;
     int hp_avg;
     int ac;
     int xp;
     int gold;
-    const char* description;
+    const char *description;
 
     //AI type (data-driven, not hard-coded by name)
-    const char* archetype;   //"melee", "caster", "swarm", "dragon", "brute", "boss"
+    const char *archetype; //"melee", "caster", "swarm", "dragon", "brute", "boss"
 
     // Speed system (Phase 4 - Speed/Tick System)
-    int speed;               // 1=lento, 2=normale, 3=veloce
+    int speed; // 1=slow, 2=normal, 3=fast
 
     //Visual range
-    int sight_range;         //default 5 if 0
+    int sight_range; //default 5 if 0
 
     //Basic damage die
-    int damage_dice;         //number of dice (e.g. 2)
-    int damage_sides;        //faces of the die (e.g. 6 → 2d6)
+    int damage_dice;  //number of dice (e.g. 2)
+    int damage_sides; //faces of the die (e.g. 6 → 2d6)
 
     //Spawning dungeon plan
-    int floor_min;           //minimum plan (0 = any)
-    int floor_max;           //maximum floor (0 = any)
+    int floor_min; //minimum plan (0 = any)
+    int floor_max; //maximum floor (0 = any)
 
     //Arrays mapping Damage and Conditions using Enum (Method 1)
     bool damage_resistances[MAX_DAMAGE_TYPES];
     bool damage_immunities[MAX_DAMAGE_TYPES];
     bool damage_vulnerabilities[MAX_DAMAGE_TYPES];
     bool condition_immunities[MAX_CONDITIONS];
+
+    /*What its description says it can do (LORE.md, "Monster defences and
+     * attacks"): advantage on saves against spells, the bludgeoning,
+     * piercing and slashing of a weapon that is not magic halved or
+     * stopped, the damage type of its blows (MAX_DAMAGE_TYPES: physical)
+     * and the condition a hit inflicts (MAX_CONDITIONS: none).*/
+    bool magic_resistance;
+    bool resist_nonmagical;
+    bool immune_nonmagical;
+    DamageType attack_type;
+    ConditionType on_hit;
 } MonsterTemplate;
 
-
-extern MonsterTemplate* bestiary_data;
+extern MonsterTemplate *bestiary_data;
 extern int bestiary_size;
 
 #endif // BESTIARY_H

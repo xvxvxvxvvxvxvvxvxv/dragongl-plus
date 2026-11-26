@@ -12,6 +12,9 @@
 # windows : cross-compiled with MinGW-w64 (static, no DLL to ship).
 #           Needs: x86_64-w64-mingw32-gcc, cmake, ninja or make.
 #
+# OpenSSL and libsodium are linked statically: tools/build_deps.sh builds
+# them once into build-<target>/deps (pinned versions, checksums checked).
+#
 # Archives are written to dist/.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -29,23 +32,29 @@ linux)
             -e DEBIAN_FRONTEND=noninteractive ubuntu:18.04 sh -c '
             set -e
             apt-get update -qq
-            apt-get install -y -qq gcc make python3-pip libx11-dev libxrandr-dev \
-                libxinerama-dev libxcursor-dev libxi-dev libxext-dev >/dev/null
+            apt-get install -y -qq gcc make perl curl ca-certificates pkg-config python3-pip \
+                libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev >/dev/null
             python3 -m pip install -q -U "pip<22" >/dev/null 2>&1
             python3 -m pip install -q "cmake<3.28" >/dev/null 2>&1
-            cmake -S /src -B /out -DCMAKE_BUILD_TYPE=Release -DDRAGONGL_PORTABLE=ON
+            /src/tools/build_deps.sh linux /out/deps
+            cmake -S /src -B /out -DCMAKE_BUILD_TYPE=Release -DDRAGONGL_PORTABLE=ON \
+                -DDRAGONGL_DEPS_PREFIX=/out/deps
             cmake --build /out -j"$(nproc)"'
     else
         echo "== Linux (host compiler)"
-        cmake -S . -B build-linux $GEN -DCMAKE_BUILD_TYPE=Release -DDRAGONGL_PORTABLE=ON
+        tools/build_deps.sh linux build-linux/deps
+        cmake -S . -B build-linux $GEN -DCMAKE_BUILD_TYPE=Release -DDRAGONGL_PORTABLE=ON \
+            -DDRAGONGL_DEPS_PREFIX="$ROOT/build-linux/deps"
         cmake --build build-linux -j
     fi
     tools/package.sh build-linux linux dist
     ;;
 windows)
     echo "== Windows (MinGW-w64 cross build)"
+    tools/build_deps.sh windows build-windows/deps
     cmake -S . -B build-windows $GEN -DCMAKE_BUILD_TYPE=Release -DDRAGONGL_PORTABLE=ON \
-        -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake
+        -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake \
+        -DDRAGONGL_DEPS_PREFIX="$ROOT/build-windows/deps"
     cmake --build build-windows -j
     tools/package.sh build-windows windows dist
     ;;

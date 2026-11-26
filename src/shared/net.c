@@ -18,180 +18,186 @@
  */
 
 #include "net.h"
-#include "platform.h"
+
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
-#ifndef _WIN32
-#include <unistd.h>
-#include <fcntl.h>
-#include <netdb.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <arpa/inet.h>
-#include <sys/select.h>
-#endif
+#include <unistd.h>
 
-int net_create_server(int port) {
-    return net_create_server_ex(port, false);
-}
-
-int net_create_server_ex(int port, bool loopback_only) {
-    int sock;
-    struct sockaddr_in addr;
-    int opt;
-    
-    plat_net_init();
-    sock = (int)socket(AF_INET, SOCK_STREAM, 0);
+/* Listening socket on every address: IPv6 with IPV6_V6ONLY off (IPv4
+ * clients arrive as ::ffff:a.b.c.d), or IPv4 only where the host has no
+ * IPv6. Close-on-exec, SO_REUSEADDR. */
+static int listen_on(int family, int port, bool loopback) {
+    int sock = socket(family, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (sock < 0) {
         return -1;
     }
-    
-    opt = 1;
-#ifdef _WIN32
-    /*SO_REUSEADDR on Windows lets ANOTHER process steal the port: use
-     * the exclusive flavour instead.*/
-    setsockopt(sock, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char *)&opt, sizeof(opt));
-#else
-    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-#endif
-    
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = loopback_only ? htonl(INADDR_LOOPBACK) : INADDR_ANY;
-    addr.sin_port = htons(port);
-    
-    if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        perror("bind");
-        plat_sock_close(sock);
+    int on = 1, off = 0;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    struct sockaddr_storage ss;
+    socklen_t len;
+    memset(&ss, 0, sizeof(ss));
+    if (family == AF_INET6) {
+        setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
+        struct sockaddr_in6 *a6 = (struct sockaddr_in6 *)&ss;
+        a6->sin6_family = AF_INET6;
+        a6->sin6_addr = loopback ? in6addr_loopback : in6addr_any;
+        a6->sin6_port = htons((uint16_t)port);
+        len = sizeof(*a6);
+    } else {
+        struct sockaddr_in *a4 = (struct sockaddr_in *)&ss;
+        a4->sin_family = AF_INET;
+        a4->sin_addr.s_addr = htonl(loopback ? INADDR_LOOPBACK : INADDR_ANY);
+        a4->sin_port = htons((uint16_t)port);
+        len = sizeof(*a4);
+    }
+    if (bind(sock, (struct sockaddr *)&ss, len) < 0 || listen(sock, SOMAXCONN) < 0) {
+        int saved = errno;
+        close(sock);
+        errno = saved;
         return -1;
     }
-    
-    if (listen(sock, 10) < 0) {
-        plat_sock_close(sock);
-        return -1;
-    }
-    
     return sock;
 }
 
-int net_connect_to_server(const char *ip, int port) {
-    /*getaddrinfo instead of inet_pton: the player can now type a host
-     * NAME (e.g. "myserver.lan") as well as a dotted IPv4 address.*/
-    struct addrinfo hints, *res = NULL, *ai;
-    char port_str[16];
-    int sock = -1;
+int net_create_server(int port) {
+    int sock = listen_on(AF_INET6, port, false);
+    if (sock < 0 && (errno == EAFNOSUPPORT || errno == EADDRNOTAVAIL)) {
+        sock = listen_on(AF_INET, port, false);
+    }
+    if (sock < 0) {
+        perror("bind");
+    }
+    return sock;
+}
 
-    plat_net_init();
+/* DragonGL+: the loopback address only (127.0.0.1; the client of "Play
+ * Solo" connects there), for the private server of one player. */
+int net_create_server_local(int port) {
+    int sock = listen_on(AF_INET, port, true);
+    if (sock < 0) {
+        perror("bind");
+    }
+    return sock;
+}
+
+/* Non-blocking connect with a deadline. Returns 0, or an errno value. */
+static int connect_with_timeout(int sock, const struct sockaddr *addr, socklen_t len,
+                                int timeout_ms) {
+    if (connect(sock, addr, len) == 0) {
+        return 0;
+    }
+    if (errno != EINPROGRESS) {
+        return errno;
+    }
+    struct pollfd pfd = {.fd = sock, .events = POLLOUT};
+    int r;
+    do {
+        r = poll(&pfd, 1, timeout_ms);
+    } while (r < 0 && errno == EINTR);
+    if (r == 0) {
+        return ETIMEDOUT;
+    }
+    if (r < 0) {
+        return errno;
+    }
+    int err = 0;
+    socklen_t elen = sizeof(err);
+    if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &err, &elen) != 0) {
+        return errno;
+    }
+    return err;
+}
+
+int net_connect_to_server(const char *host, int port, int timeout_ms, char *why, size_t why_len) {
+    char service[16];
+    snprintf(service, sizeof(service), "%d", port);
+    struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
+    hints.ai_family = AF_UNSPEC; /* IPv6 and IPv4, in the resolver's order */
     hints.ai_socktype = SOCK_STREAM;
-    snprintf(port_str, sizeof(port_str), "%d", port);
-    if (getaddrinfo(ip, port_str, &hints, &res) != 0 || !res) {
+    hints.ai_flags = AI_ADDRCONFIG;
+    int gai = getaddrinfo(host, service, &hints, &res);
+    if (gai != 0) {
+        snprintf(why, why_len, "cannot resolve %s: %s", host, gai_strerror(gai));
         return -1;
     }
-    for (ai = res; ai; ai = ai->ai_next) {
-        sock = (int)socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (sock < 0) continue;
-        if (connect(sock, ai->ai_addr, (int)ai->ai_addrlen) == 0) {
-            /*Small, latency-sensitive messages (moves, commands): no
-             * Nagle batching.*/
-            int one = 1;
-            setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof(one));
+    int sock = -1, last_err = 0;
+    for (const struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+        sock =
+            socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC | SOCK_NONBLOCK, ai->ai_protocol);
+        if (sock < 0) {
+            last_err = errno;
+            continue;
+        }
+        last_err = connect_with_timeout(sock, ai->ai_addr, ai->ai_addrlen, timeout_ms);
+        if (last_err == 0) {
             break;
         }
-        plat_sock_close(sock);
+        close(sock);
         sock = -1;
     }
     freeaddrinfo(res);
+    if (sock < 0) {
+        snprintf(why, why_len, "cannot connect to %s port %d: %s", host, port,
+                 strerror(last_err ? last_err : ECONNREFUSED));
+        return -1;
+    }
+    /* A server that vanished without closing (power loss, network cut) is
+     * noticed after ~90 s instead of never. */
+    int on = 1, idle = 60, interval = 10, count = 3;
+    setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
+    setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+    setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
+    setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count));
+    setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+    why[0] = '\0';
     return sock;
 }
 
 void net_set_nonblocking(int sock) {
-    plat_sock_set_nonblocking(sock);
+    int flags = fcntl(sock, F_GETFL, 0);
+    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
 }
 
-/*True if the send()/recv() error is TRANSIENT (retry after a short
- * pause). Everything else (EPIPE, ENOTCONN, ECONNRESET, EBADF, ...) is
- * permanent: the peer is gone or the fd is invalid, and retrying would
- * only spin the caller for the whole retry budget (~1 s) for nothing.
- * Callers that must drop a client on the first failure (server
- * net_send_client) rely on this distinction.*/
-static bool net_err_is_transient(void) {
-    return plat_sock_would_block();
-}
-
+/*Send everything on a (possibly non-blocking) socket. A full send buffer
+ * (EAGAIN) is waited for with poll(), up to ~2 s in total; any other
+ * error (EPIPE, ECONNRESET, ...) fails at once: the peer is gone.*/
 bool net_send(int sock, const void *data, int len) {
-    int total = 0;
-    int retries = 0;
-    /*100 retries * 10ms = at most ~1s of blocking on a SLOW peer
-     * (buffer full, EAGAIN) before the caller drops the send (and may
-     * disconnect the client). This used to be 500 (5s): a single
-     * slow/stuck client could stall the whole server loop for several
-     * seconds. (Full per-client send buffers with backpressure would
-     * remove the blocking entirely; this cap keeps the worst case sane
-     * until then.) Permanent errors (dead peer, closed fd) fail
-     * IMMEDIATELY: a failed send must be visible to the caller in the
-     * same tick, not a second later.*/
-    int max_retries = 100;
     const char *buf = (const char *)data;
-    if (sock < 0)
-        return false;
-
-    while (total < len && retries < max_retries) {
-        int sent = (int)send(sock, buf + total, len - total, MSG_NOSIGNAL);
-        if (sent > 0) {
-            total += sent;
-            retries = 0;
-        } else if (sent == 0) {
-            return false;
-        } else {
-            if (!net_err_is_transient())
-                return false; /*peer closed / bad fd: don't spin ~1s*/
-            retries++;
-            plat_sleep_ms(10);
-        }
-    }
-
-    return total == len;
-}
-
-int net_receive(int sock, void *buffer, int max_len) {
-    int bytes;
-    
-    bytes = (int)recv(sock, buffer, max_len, 0);
-    
-    return bytes;
-}
-
-/*Read exactly 'len' bytes, retrying on EAGAIN with short pauses.
-   Returns len on success, -1 on peer close or retry exhaustion.
-   Permanent errors (EPIPE, ENOTCONN, EBADF, ...) return -1 at once
-   instead of spinning the whole retry budget (~5 s).*/
-int net_receive_exact(int sock, void *buffer, int len) {
     int total = 0;
-    int retries = 0;
-    int max_retries = 500;
-    char *buf = (char *)buffer;
-
-    while (total < len && retries < max_retries) {
-        int bytes = (int)recv(sock, buf + total, len - total, 0);
-        if (bytes > 0) {
-            total += bytes;
-            retries = 0;
-        } else if (bytes == 0) {
-            return -1; /* peer closed */
-        } else {
-            if (!net_err_is_transient())
-                return -1;
-            retries++;
-            plat_sleep_ms(10);
-        }
+    int waited_ms = 0;
+    if (sock < 0 || len < 0) {
+        return false;
     }
-
-    return (total == len) ? total : -1;
+    while (total < len) {
+        /*MSG_NOSIGNAL: a peer that already closed yields EPIPE instead of
+         * a SIGPIPE that would terminate the process.*/
+        ssize_t sent = send(sock, buf + total, (size_t)(len - total), MSG_NOSIGNAL);
+        if (sent > 0) {
+            total += (int)sent;
+            continue;
+        }
+        if (sent < 0 && errno == EINTR) {
+            continue;
+        }
+        if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && waited_ms < 2000) {
+            struct pollfd pfd = {.fd = sock, .events = POLLOUT};
+            poll(&pfd, 1, 50);
+            waited_ms += 50;
+            continue;
+        }
+        return false;
+    }
+    return true;
 }
 
 /*Always-NUL-terminated string copy (see net.h).
@@ -199,131 +205,20 @@ int net_receive_exact(int sock, void *buffer, int len) {
  * that SHRINKS between two calls cannot leave the old tail behind —
  * setting only dst[cap-1] would do exactly that.*/
 void copy_str(char *dst, const char *src, size_t cap) {
-    if (cap == 0)
+    if (cap == 0) {
         return;
+    }
     size_t n = 0;
     if (src) {
         n = strlen(src);
-        if (n >= cap)
+        if (n >= cap) {
             n = cap - 1;
+        }
         memcpy(dst, src, n);
     }
     dst[n] = '\0';
 }
 
-int net_wait_readable(int sock, int timeout_ms) {
-    fd_set rf;
-    struct timeval tv;
-    if (sock < 0) return -1;
-    FD_ZERO(&rf);
-    FD_SET(sock, &rf);
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    int r = select(sock + 1, &rf, NULL, NULL, &tv);
-    if (r < 0) return plat_sock_would_block() ? 0 : -1;
-    return r > 0 ? 1 : 0;
-}
-
-bool net_peek_closed(int sock) {
-    char c;
-    int r = (int)recv(sock, &c, 1, MSG_PEEK);
-    if (r == 0) return true;
-    if (r < 0) return !plat_sock_would_block();
-    return false;
-}
-
-int net_connect_timeout(const char *host, int port, int timeout_ms, char *err, size_t err_len) {
-    struct addrinfo hints, *res = NULL, *ai;
-    char port_str[16];
-    int sock = -1;
-
-    plat_net_init();
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    snprintf(port_str, sizeof(port_str), "%d", port);
-    if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
-        if (err) snprintf(err, err_len, "Unknown host '%s'.", host);
-        return -1;
-    }
-    if (err) snprintf(err, err_len, "Cannot reach %s:%d (no server listening?).", host, port);
-    for (ai = res; ai; ai = ai->ai_next) {
-        sock = (int)socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (sock < 0) continue;
-        plat_sock_set_nonblocking(sock);
-        int r = connect(sock, ai->ai_addr, (int)ai->ai_addrlen);
-        bool ok = (r == 0);
-        if (!ok) {
-#ifdef _WIN32
-            bool pending = WSAGetLastError() == WSAEWOULDBLOCK;
-#else
-            bool pending = errno == EINPROGRESS;
-#endif
-            if (pending) {
-                fd_set wf, ef;
-                struct timeval tv;
-                FD_ZERO(&wf);
-                FD_ZERO(&ef);
-                FD_SET(sock, &wf);
-                FD_SET(sock, &ef);
-                tv.tv_sec = timeout_ms / 1000;
-                tv.tv_usec = (timeout_ms % 1000) * 1000;
-                if (select(sock + 1, NULL, &wf, &ef, &tv) > 0 && FD_ISSET(sock, &wf)) {
-                    int so_err = 0;
-                    socklen_t len = sizeof(so_err);
-                    getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&so_err, &len);
-                    ok = (so_err == 0);
-                } else if (err) {
-                    snprintf(err, err_len, "Connection to %s:%d timed out.", host, port);
-                }
-            }
-        }
-        if (ok) {
-            int one = 1;
-            setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof(one));
-            break;
-        }
-        plat_sock_close(sock);
-        sock = -1;
-    }
-    freeaddrinfo(res);
-    return sock; /*still NON-BLOCKING*/
-}
-
 void net_close(int sock) {
-    plat_sock_close(sock);
+    close(sock);
 }
-
-/*Read exactly 'len' bytes on a non-blocking socket,
-   trying again with short pauses up to a maximum of 500 iterations (~5 sec).
-   Permanent errors (EPIPE, ENOTCONN, EBADF, ...) return -1 at once
-   instead of spinning the whole budget.*/
-int net_receive_all(int sock, void *buffer, int len) {
-    int total = 0;
-    int retries = 0;
-    int max_retries = 500;
-    char *buf = (char *)buffer;
-    
-    while (total < len && retries < max_retries) {
-        int bytes = (int)recv(sock, buf + total, len - total, 0);
-        if (bytes > 0) {
-            total = total + bytes;
-            retries = 0;
-        } else if (bytes == 0) {
-            /* connection closed */
-            return -1;
-        } else {
-            /* EAGAIN / EWOULDBLOCK (retry); anything else is a dead peer */
-            if (!net_err_is_transient())
-                return -1;
-            retries = retries + 1;
-            plat_sleep_ms(10);
-        }
-    }
-    
-    if (total == len) {
-        return total;
-    }
-    return -1;
-}
-
