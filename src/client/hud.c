@@ -334,13 +334,22 @@ bool hud_game_input_allowed(void) { return !(g_app.windows & WIN_PAUSE) && !g_ap
 typedef struct { bool open; float x, y; InvItem item; int idx; } CtxMenu;
 static CtxMenu g_ctx;
 
+/*Takes off an equipped item by its slot name: the name shown in the
+ * window ("Torch (95/100 light turns)", "??? (unknown)") is not one that
+ * 'takeoff' finds. Rings have no slot name and go by their name.*/
+static void takeoff_cmd(const InvItem *it, char *out, size_t cap) {
+    static const char *slot[] = {"head", "neck", "body", "back", "hand_r", "hand_l", "hands", "arm_r", "arm_l", "feet"};
+    if (it->slot < 10) snprintf(out, cap, "takeoff %s", slot[it->slot]);
+    else snprintf(out, cap, "takeoff %s", it->name);
+}
+
 static void smart_use(const InvItem *it) {
     int n = it->slot + 1;
     switch (it->where) {
     case INV_EQUIPPED: {
-        static const char *slot[] = {"head", "neck", "body", "back", "hand_r", "hand_l", "hands", "arm_r", "arm_l", "feet"};
-        if (it->slot < 10) app_send("takeoff %s", slot[it->slot]);
-        else app_send("takeoff %s", it->name);
+        char cmd[96];
+        takeoff_cmd(it, cmd, sizeof(cmd));
+        app_send("%s", cmd);
         audio_sfx(SFX_EQUIP, 0.6f, 0);
         return;
     }
@@ -382,7 +391,9 @@ static void ctx_menu_draw(void) {
         ADD("Use", "use belt %d", n);
         ADD("Back to backpack", "unbelt %d", n);
     } else {
-        ADD("Take off", "takeoff %s", it->name);
+        labels[k] = "Take off";
+        takeoff_cmd(it, cmds[k], sizeof(cmds[k]));
+        k++;
     }
 #undef ADD
     float w = 200, rh = 32, h = (float)k * rh + 12;
