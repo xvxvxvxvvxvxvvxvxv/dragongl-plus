@@ -334,13 +334,46 @@ bool hud_game_input_allowed(void) { return !(g_app.windows & WIN_PAUSE) && !g_ap
 typedef struct { bool open; float x, y; InvItem item; int idx; } CtxMenu;
 static CtxMenu g_ctx;
 
+/*The item's own name in the name shown for it, which 'takeoff' finds:
+ * "** Ring of Fire [Ring of Warmth] (+0, +2) **" is "Ring of Warmth",
+ * "Ring of Resistance (Fire)" is "Ring of Resistance", and the words of
+ * blessing, quality and element in front go too.*/
+static void item_base_name(const char *shown, char *out, size_t cap) {
+    const char *s = shown;
+    size_t n;
+    const char *lb = strncmp(s, "** ", 3) == 0 ? strchr(s, '[') : NULL;
+    const char *rb = lb ? strchr(lb, ']') : NULL;
+    if (lb && rb) {
+        s = lb + 1;
+        n = (size_t)(rb - s);
+    } else {
+        static const char *const words[] = {"Blessed ", "Cursed ", "Rusty ", "Fine ", "Masterwork ",
+                                            "Flaming ", "Frost ", "Shocking ", "Poisonous "};
+        bool more = true;
+        while (more) {
+            more = false;
+            for (size_t i = 0; i < sizeof(words) / sizeof(words[0]) && !more; i++)
+                if (strncmp(s, words[i], strlen(words[i])) == 0) { s += strlen(words[i]); more = true; }
+        }
+        n = strlen(s);
+        const char *paren = strstr(s, " (");
+        if (paren && n > 0 && s[n - 1] == ')') n = (size_t)(paren - s);
+    }
+    snprintf(out, cap, "%.*s", (int)n, s);
+}
+
 /*Takes off an equipped item by its slot name: the name shown in the
  * window ("Torch (95/100 light turns)", "??? (unknown)") is not one that
- * 'takeoff' finds. Rings have no slot name and go by their name.*/
+ * 'takeoff' finds. Rings have no slot name and go by the item's own name.*/
 static void takeoff_cmd(const InvItem *it, char *out, size_t cap) {
     static const char *slot[] = {"head", "neck", "body", "back", "hand_r", "hand_l", "hands", "arm_r", "arm_l", "feet"};
-    if (it->slot < 10) snprintf(out, cap, "takeoff %s", slot[it->slot]);
-    else snprintf(out, cap, "takeoff %s", it->name);
+    if (it->slot < 10) {
+        snprintf(out, cap, "takeoff %s", slot[it->slot]);
+    } else {
+        char base[sizeof(it->name)];
+        item_base_name(it->name, base, sizeof(base));
+        snprintf(out, cap, "takeoff %s", base);
+    }
 }
 
 static void smart_use(const InvItem *it) {
