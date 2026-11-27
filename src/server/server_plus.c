@@ -420,8 +420,10 @@ static void build_shop(const Game *game, const NPC *merchant, MsgShop *m) {
         switch (it->category) {
         case ITEM_WEAPON:
             type = "Weapon";
-            snprintf(stats, sizeof(stats), "%dd%d dmg", it->damage_dice_count,
-                     it->damage_dice_sides);
+            if (it->damage_dice_count > 0) {
+                snprintf(stats, sizeof(stats), "%dd%d dmg", it->damage_dice_count,
+                         it->damage_dice_sides);
+            }
             break;
         case ITEM_ARMOR:
             type = "Armor";

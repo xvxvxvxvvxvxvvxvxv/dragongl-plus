@@ -1,3 +1,14 @@
+* Thu Nov 26 2026 DragonGL+ - 2026.11.26.01
+- INTERFACE: "Take off" in the right-click menu of the inventory names
+  the slot, as a double click does, instead of the shown name, which
+  'takeoff' did not find ("Torch (95/100 light turns)", "??? (unknown)").
+  Rings, which have no slot name, still go by their name.
+
+* Wed Nov 25 2026 DragonGL+ - 2026.11.25.01
+- SHOPS: the Net, the Blowgun and ammunition show "-" instead of
+  "0d0 dmg" in the shop list.
+- COMMANDS: dm_spawn_boss no longer says "Boss Boss <name>".
+
 * Wed Nov 25 2026 DragonGL+ - 2026.11
 - SERVER: DragonGL+ now runs on Dragon GL's current server (Nicola
   Taibi, 2026.11.23.01) instead of the fork of October: protocol v5

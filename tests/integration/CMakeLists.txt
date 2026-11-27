@@ -90,7 +90,7 @@ foreach(t trade_offer_revalidated_on_accept trade_moves_item_and_gold
           floor_walk_matches_scan entity_lookup player_move
           spell_attack spell_save_area spell_cone_and_line spell_conditions spell_self
           spell_cloud spell_special_and_terrain spell_refusals spell_every_effect
-          shop_no_arbitrage ammunition_bundles shop_reactive_prices shop_needs_a_merchant wear_cursed_stays merchant_restocks
+          shop_no_arbitrage ammunition_bundles shop_reactive_prices shop_list_no_dice shop_needs_a_merchant wear_cursed_stays takeoff_by_slot_name merchant_restocks
           boss_floor_is_playable dm_spawn_and_place numeric_arguments
           tunnel_keeps_the_border floors_without_characters_sleep
           swarm_splits_into_free_slots full_table_spares_the_boss swarm_clones_stop_at_the_floor_cap

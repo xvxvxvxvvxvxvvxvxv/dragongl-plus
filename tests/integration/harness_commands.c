@@ -255,6 +255,20 @@ int test_ammunition_bundles(void) {
     return 0;
 }
 
+/* A weapon with no damage dice (the Net, ammunition) lists "-" in the
+ * shop, not "0d0 dmg". */
+int test_shop_list_no_dice(void) {
+    Client *c = adventurer();
+    int net = item_named("Net");
+    CHECK(c && net >= 0 && item_database[net].damage_dice_count == 0,
+          "no player or no weapon without dice");
+    merchant_at(CX + 1, CY, net, 4);
+    run(c, "list");
+    CHECK(said("Net"), "the Net is not listed");
+    CHECK(!said("0d0"), "a weapon without dice listed as 0d0 dmg");
+    return 0;
+}
+
 /* LORE.md, Reactive Economy: economy_modifier = 0.5 + 1.5 * (1 - stock /
  * max_stock): half the cost on a full shelf, double on an empty one; the
  * list shows the price 'buy' asks. */
@@ -374,6 +388,39 @@ int test_wear_cursed_stays(void) {
     CHECK(c->slot_body.durability == 100 && c->backpack_count == 1 &&
               c->backpack[0].durability == 7,
           "the worn armor and the carried one were not swapped");
+    return 0;
+}
+
+/* The DragonGL+ client takes an item off by its slot name: the name it
+ * shows ("Torch (100/100 light turns)", "??? (unknown)") is not the item's
+ * own name, and 'takeoff' does not find the item by it. */
+int test_takeoff_by_slot_name(void) {
+    Client *c = adventurer();
+    int torch = item_named("Torch");
+    int armor = item_of(ITEM_ARMOR, 1);
+    CHECK(c && torch >= 0 && armor >= 0, "no player, no torch or no armor");
+    c->slot_hand_l.template_idx = torch;
+    c->slot_hand_l.stack_count = 1;
+    c->slot_hand_l.durability = 100;
+    c->slot_hand_l.is_identified = true;
+    c->slot_hand_l.blessing = BLESS_NORMAL;
+    c->slot_hand_l.quality = QUALITY_NORMAL;
+    char shown[128], line[160];
+    get_full_item_name(&c->slot_hand_l, shown, sizeof(shown));
+    snprintf(line, sizeof(line), "takeoff %s", shown);
+    run(c, line);
+    CHECK(c->slot_hand_l.template_idx == torch, "the torch came off by its shown name");
+    run(c, "takeoff hand_l");
+    CHECK(c->slot_hand_l.template_idx == -1 && c->backpack_count == 1,
+          "the torch did not come off by its slot name");
+    c->slot_body.template_idx = armor;
+    c->slot_body.stack_count = 1;
+    c->slot_body.is_identified = false;
+    c->slot_body.blessing = BLESS_NORMAL;
+    c->slot_body.quality = QUALITY_NORMAL;
+    run(c, "takeoff body");
+    CHECK(c->slot_body.template_idx == -1 && c->backpack_count == 2,
+          "an unidentified armor did not come off by its slot name");
     return 0;
 }
 

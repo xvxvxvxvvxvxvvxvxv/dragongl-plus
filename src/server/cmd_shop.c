@@ -641,8 +641,12 @@ void print_merchant_inventory(Client *c, const MerchantData *shop) {
 
         if (it->category == ITEM_WEAPON) {
             strcpy(type_info, "Weapon");
-            snprintf(stat_info, sizeof(stat_info), "%dd%d dmg", it->damage_dice_count,
-                     it->damage_dice_sides);
+            /*Nets, ammunition and the blowgun have no damage dice: "-"
+             * instead of a meaningless "0d0 dmg".*/
+            if (it->damage_dice_count > 0) {
+                snprintf(stat_info, sizeof(stat_info), "%dd%d dmg", it->damage_dice_count,
+                         it->damage_dice_sides);
+            }
         } else if (it->category == ITEM_ARMOR) {
             strcpy(type_info, "Armor");
             snprintf(stat_info, sizeof(stat_info), "AC %d%s", it->ac_base, armour_dex_note(it));

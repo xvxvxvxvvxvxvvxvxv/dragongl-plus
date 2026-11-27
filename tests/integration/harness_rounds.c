@@ -425,6 +425,7 @@ int test_dm_reports(void) {
     CHECK(said("Use: dm_spawn_boss"), "a boss on floor 0");
     run(c, "dm_spawn_boss 10");
     CHECK(said("successfully spawned on floor 10"), "no boss");
+    CHECK(!said("Boss Boss"), "the boss named twice in the spawn message");
     NPC *boss = NULL;
     for (int i = 0; i < MAX_NPCS && !boss; i++) {
         if (g_game.npcs[i].active && g_game.npcs[i].archetype == ARCH_BOSS) {
