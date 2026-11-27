@@ -1,3 +1,15 @@
+* Fri Nov 27 2026 DragonGL+ - 2026.11.27.01
+- SHOPS: 'browse' and 'lore' show the whole item description again, over
+  several lines, without the HTML of items.json ("<br />", "<td>"...):
+  since the new server they sent one chat line, cut at 255 characters
+  (261 of the 641 descriptions are longer). Tables show one row a line,
+  with " | " between the cells.
+- INTERFACE: "Take off" (and a double click) on a worn ring sends the
+  ring's own name: a Ring of Resistance, shown "Ring of Resistance
+  (Fire)", or an artifact ring stayed on with "Item not found".
+- ITEMS: two description fixes: "die.If" in the Ring of Mind Shielding
+  and a broken "<br" tag in the Rod of Alertness.
+
 * Thu Nov 26 2026 DragonGL+ - 2026.11.26.01
 - INTERFACE: "Take off" in the right-click menu of the inventory names
   the slot, as a double click does, instead of the shown name, which

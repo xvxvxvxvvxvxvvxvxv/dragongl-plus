@@ -66,7 +66,9 @@ bool cmd_browse(Client *c, const char *cmd, Game *game) {
         return true;
     }
     const ItemTemplate *it = &item_database[shop->item_templates[target_item]];
-    send_text_to_client(c->sock, "[STORE] %s: %s", it->name, it->description);
+    char head[96];
+    snprintf(head, sizeof(head), "[STORE] %s: ", it->name);
+    send_long_text(c->sock, head, it->description);
     return true;
 }
 

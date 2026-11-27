@@ -25,6 +25,11 @@
 #include <stdbool.h>
 
 void send_text_to_client(int sock, const char *fmt, ...);
+/*"<head><text>" over as many chat lines as it takes (a line holds 255
+ * characters; item descriptions run to 3,000), broken between words. text
+ * is the HTML of items.json: its tags become line breaks and " | "
+ * between table cells.*/
+void send_long_text(int sock, const char *head, const char *html);
 /*Queue bytes for a client (never blocks, see server_conn.h). Returns
  * false if the client is being dropped (peer gone, queue overflow): the
  * main loop reaps it at the end of the iteration.*/

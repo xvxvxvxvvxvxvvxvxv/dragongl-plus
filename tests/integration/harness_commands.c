@@ -426,6 +426,76 @@ int test_takeoff_by_slot_name(void) {
 
 /* --- World ---------------------------------------------------------------------- */
 
+/* A worn ring has no slot name, so the DragonGL+ client takes it off by
+ * the item's own name, without the suffix it shows: "Ring of Resistance
+ * (Fire)" is not a name 'takeoff' finds, "Ring of Resistance" is; an
+ * artifact ring goes by the name in its brackets. */
+int test_takeoff_ring_by_item_name(void) {
+    Client *c = adventurer();
+    int resist = item_named("Ring of Resistance");
+    int warmth = item_named("Ring of Warmth");
+    CHECK(c && resist >= 0 && warmth >= 0, "no player or no rings");
+    for (int i = 0; i < 10; i++) {
+        fx_reset_item(&c->slot_rings[i]);
+    }
+    ItemInstance *r = &c->slot_rings[0];
+    r->template_idx = resist;
+    r->stack_count = 1;
+    r->is_identified = true;
+    r->blessing = BLESS_NORMAL;
+    r->quality = QUALITY_NORMAL;
+    r->current_charges = DMG_FIRE + 1;
+    char shown[128], line[160];
+    get_full_item_name(r, shown, sizeof(shown));
+    CHECK(strchr(shown, '(') != NULL, "the ring shows no resistance: %s", shown);
+    snprintf(line, sizeof(line), "takeoff %s", shown);
+    run(c, line);
+    CHECK(r->template_idx == resist, "the ring came off by its shown name");
+    run(c, "takeoff Ring of Resistance");
+    CHECK(r->template_idx == -1 && c->backpack_count == 1,
+          "the ring did not come off by its own name");
+
+    ItemInstance *a = &c->slot_rings[1];
+    a->template_idx = warmth;
+    a->stack_count = 1;
+    a->is_identified = true;
+    a->blessing = BLESS_NORMAL;
+    a->quality = QUALITY_MASTERWORK;
+    a->is_artifact = true;
+    snprintf(a->artifact_name, sizeof(a->artifact_name), "Ring of Fire");
+    a->to_dam_bonus = 2;
+    get_full_item_name(a, shown, sizeof(shown));
+    CHECK(strstr(shown, "[Ring of Warmth]") != NULL, "the artifact shows no base: %s", shown);
+    run(c, "takeoff Ring of Warmth");
+    CHECK(a->template_idx == -1 && c->backpack_count == 2,
+          "the artifact ring did not come off by its base item");
+    return 0;
+}
+
+/* 'browse' and 'lore' tell the whole description of an item, over several
+ * chat lines (one holds 255 characters), without the HTML of items.json. */
+int test_item_description_lines(void) {
+    Client *c = adventurer();
+    int deck = item_named("Deck of Illusions");
+    int rod = item_named("Rod of Alertness");
+    CHECK(c && deck >= 0 && rod >= 0, "no player, no deck or no rod");
+    CHECK(strlen(item_database[deck].description) > 2000, "the deck has a short description");
+    merchant_at(CX + 1, CY, deck, 1);
+    run(c, "browse 1");
+    CHECK(said("[STORE] Deck of Illusions: This box contains a set of parchment cards."),
+          "browse: no first line");
+    CHECK(said("Jokers (2) | You (the deck's owner)"), "browse: the end of the table is missing");
+    CHECK(!said("<br") && !said("<td>") && !said("</tr>"), "browse: HTML in the text");
+
+    carry(c, rod);
+    run(c, "lore 1");
+    CHECK(said("[LORE] Rod of Alertness: "), "lore: no first line");
+    CHECK(said("Protective Aura: As an action"), "lore: the second property is missing");
+    CHECK(said("can't be used again until the next dawn."), "lore: the end is missing");
+    CHECK(!said("<br") && !said("</p>"), "lore: HTML in the text");
+    return 0;
+}
+
 /* Floor 20 was solid rock: no room, no stairs, no way further down. */
 int test_boss_floor_is_playable(void) {
     static const int floors[] = {10, 20, 30};

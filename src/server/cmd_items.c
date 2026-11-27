@@ -191,7 +191,9 @@ bool cmd_lore(Client *c, const char *cmd, Game *game) {
     }
 
     ItemTemplate *tmpl = &item_database[c->backpack[found_idx].template_idx];
-    send_text_to_client(c->sock, "[LORE] %s: %s", tmpl->name, tmpl->description);
+    char head[96];
+    snprintf(head, sizeof(head), "[LORE] %s: ", tmpl->name);
+    send_long_text(c->sock, head, tmpl->description);
 
     if (tmpl->category == ITEM_BOOK) {
         send_text_to_client(c->sock, "--- Spell Index ---");
