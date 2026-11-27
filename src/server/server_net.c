@@ -28,7 +28,9 @@
 #include "player.h"
 #include "server_log.h"
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdarg.h>
 
 /*Every frame is encoded into this writer (the game loop is the only
@@ -55,6 +57,131 @@ void send_text_to_client(int sock, const char *fmt, ...) {
     if (wire_put_text(tx_frame(), &t)) {
         tx_send(sock);
     }
+}
+
+/*The tag at s ('<'): its length up to '>' and whether it ends a line
+ * ("br", "p", "tr", "li", lists and tables) or starts a table cell; 0
+ * when s is not a tag (a lone '<', or a tag that never closes).*/
+static size_t html_tag(const char *s, bool *line_break, bool *cell, bool *item) {
+    static const char *const breaks[] = {"br",    "p",     "tr",    "li",    "ul", "ol",
+                                         "table", "thead", "tbody", "tfoot", "div"};
+    const char *p = s + 1;
+    bool closing = *p == '/';
+    if (closing) {
+        p++;
+    }
+    size_t n = 0;
+    while (n < 8 && ((p[n] >= 'a' && p[n] <= 'z') || (p[n] >= 'A' && p[n] <= 'Z'))) {
+        n++;
+    }
+    if (n == 0 || n == 8) {
+        return 0;
+    }
+    const char *end = p + n;
+    while (*end == ' ' || *end == '/') {
+        end++;
+    }
+    if (*end != '>') {
+        return 0;
+    }
+    *line_break = *cell = *item = false;
+    for (size_t i = 0; i < sizeof(breaks) / sizeof(breaks[0]); i++) {
+        if (strlen(breaks[i]) == n && strncasecmp(p, breaks[i], n) == 0) {
+            *line_break = true;
+            *item = !closing && n == 2 && strncasecmp(p, "li", 2) == 0;
+        }
+    }
+    *cell = !closing && n == 2 && (strncasecmp(p, "td", 2) == 0 || strncasecmp(p, "th", 2) == 0);
+    return (size_t)(end + 1 - s);
+}
+
+/*The HTML of items.json as plain text: tags out, a '\n' where a line,
+ * paragraph, list item or table row ends, " | " between table cells,
+ * runs of blanks as one space. Never longer than the HTML.*/
+static void html_to_text(const char *html, char *out) {
+    char *o = out;
+    for (const char *s = html; *s;) {
+        bool line_break, cell, item;
+        size_t tag = *s == '<' ? html_tag(s, &line_break, &cell, &item) : 0;
+        if (tag > 0) {
+            s += tag;
+            while (o > out && o[-1] == ' ') {
+                o--;
+            }
+            if (line_break && o > out && o[-1] != '\n') {
+                *o++ = '\n';
+            }
+            if (item) {
+                *o++ = '-';
+                *o++ = ' ';
+            } else if (cell && o > out && o[-1] != '\n') {
+                memcpy(o, " | ", 3);
+                o += 3;
+            }
+            continue;
+        }
+        char ch = *s++;
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
+            if (o > out && o[-1] != ' ' && o[-1] != '\n') {
+                *o++ = ' ';
+            }
+            continue;
+        }
+        *o++ = ch;
+    }
+    while (o > out && (o[-1] == ' ' || o[-1] == '\n')) {
+        o--;
+    }
+    *o = '\0';
+}
+
+void send_long_text(int sock, const char *head, const char *html) {
+    enum { LINE_MAX_CHARS = 240 };
+    char *text = malloc(strlen(html) + 1);
+    if (!text) {
+        send_text_to_client(sock, "%s%.*s", head, LINE_MAX_CHARS, html);
+        return;
+    }
+    html_to_text(html, text);
+    size_t hlen = strlen(head);
+    if (hlen > LINE_MAX_CHARS / 2) {
+        hlen = LINE_MAX_CHARS / 2;
+    }
+    bool first = true;
+    const char *t = text;
+    while (first || *t != '\0') {
+        size_t room = first ? LINE_MAX_CHARS - hlen : LINE_MAX_CHARS;
+        size_t len = strcspn(t, "\n");
+        if (len > room) {
+            /*break at the last space that fits; a longer word is cut
+             * without splitting a UTF-8 sequence*/
+            size_t cut = room;
+            while (cut > room / 2 && t[cut] != ' ') {
+                cut--;
+            }
+            if (t[cut] != ' ') {
+                cut = room;
+                while (cut > 0 && ((unsigned char)t[cut] & 0xC0) == 0x80) {
+                    cut--;
+                }
+                if (cut == 0) {
+                    cut = room;
+                }
+            }
+            len = cut;
+        }
+        if (first) {
+            send_text_to_client(sock, "%.*s%.*s", (int)hlen, head, (int)len, t);
+        } else if (len > 0) {
+            send_text_to_client(sock, "%.*s", (int)len, t);
+        }
+        t += len;
+        while (*t == ' ' || *t == '\n') {
+            t++;
+        }
+        first = false;
+    }
+    free(text);
 }
 
 void send_combat_event(int sock, int kind, int entity_id, int amount) {
