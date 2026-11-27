@@ -1376,6 +1376,8 @@ static const TestCase k_tests[] = {
     {"shop_needs_a_merchant", test_shop_needs_a_merchant},
     {"wear_cursed_stays", test_wear_cursed_stays},
     {"takeoff_by_slot_name", test_takeoff_by_slot_name},
+    {"takeoff_ring_by_item_name", test_takeoff_ring_by_item_name},
+    {"item_description_lines", test_item_description_lines},
     {"merchant_restocks", test_merchant_restocks},
     {"boss_floor_is_playable", test_boss_floor_is_playable},
     {"dm_spawn_and_place", test_dm_spawn_and_place},

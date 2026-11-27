@@ -17,6 +17,8 @@ int test_shop_list_no_dice(void);
 int test_shop_needs_a_merchant(void);
 int test_wear_cursed_stays(void);
 int test_takeoff_by_slot_name(void);
+int test_takeoff_ring_by_item_name(void);
+int test_item_description_lines(void);
 int test_merchant_restocks(void);
 int test_boss_floor_is_playable(void);
 int test_dm_spawn_and_place(void);
